@@ -9679,6 +9679,7 @@ function wp_stocks_debug_page() {
 
     // --------------------------------------------------
     // Webull診断（設定ページから移動・2026/09/15 単一銘柄フォームに簡素化）
+    // 2026/09/15 Yahoo側と同様、ページ表示時にその場でリクエストして結果を表示する方式に変更
     // --------------------------------------------------
     echo '<hr style="margin:30px 0;">';
     echo '<h1>Webull API診断</h1>';
@@ -9696,9 +9697,36 @@ function wp_stocks_debug_page() {
     echo '<button type="submit" class="button button-primary">Webullレスポンス確認</button>';
     echo '</form>';
 
-    $webull_test_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_fetch&symbol=' . urlencode($webull_debug_symbol) . '&category=' . urlencode($webull_debug_category)), 'wp_stocks_webull_test');
-    echo '<a href="' . esc_url($webull_test_url) . '" class="button" target="_blank">上記の銘柄でレスポンスを取得（新しいタブ）</a>';
-    echo '<p class="description">保存済みのApp Key/Secretを使用して、新しいタブでHTTPステータスと生JSONレスポンスを表示します。</p>';
+    $webull_debug_host = 'api.webull.co.jp';
+    $webull_debug_path = '/market-data/stocks/bars/list';
+    $webull_debug_body = wp_json_encode(array(
+        'symbols'            => array($webull_debug_symbol),
+        'category'           => $webull_debug_category,
+        'timespan'           => 'D',
+        'count'              => 10,
+        'real_time_required' => false,
+    ));
+
+    $webull_debug_signed  = wp_stocks_webull_sign_request('POST', $webull_debug_path, array(), $webull_debug_body, $webull_debug_host, 'v3', 'HMAC-SHA1');
+    $webull_debug_headers = $webull_debug_signed['headers'];
+    $webull_debug_headers['Content-Type'] = 'application/json';
+    $webull_debug_headers['Accept']       = 'application/json';
+
+    $webull_debug_response = wp_remote_post('https://' . $webull_debug_host . $webull_debug_path, array(
+        'headers' => $webull_debug_headers,
+        'body'    => $webull_debug_body,
+        'timeout' => 30,
+    ));
+
+    if (is_wp_error($webull_debug_response)) {
+        echo '<p style="color:red;">通信エラー: ' . esc_html($webull_debug_response->get_error_message()) . '</p>';
+    } else {
+        $webull_debug_status = wp_remote_retrieve_response_code($webull_debug_response);
+        $webull_debug_raw    = wp_remote_retrieve_body($webull_debug_response);
+        $webull_debug_bg     = ($webull_debug_status == 200) ? '#e8f8e8' : '#fde8e8';
+        echo '<p>HTTP Status: <strong>' . esc_html($webull_debug_status) . '</strong></p>';
+        echo '<pre style="background:' . $webull_debug_bg . ';padding:10px;border-radius:4px;max-height:400px;overflow:auto;">' . esc_html($webull_debug_raw) . '</pre>';
+    }
 
     echo '</div>';
 }
