@@ -8982,7 +8982,7 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
             echo '<p style="color:#888;padding:20px;">データがありません。</p>';
         } else {
             $topix17_map = wp_stocks_get_topix17_sector_map();
-            $periods = ['1日' => 1, '5日' => 5, '1ヶ月' => 21, '2ヶ月' => 42, '1年' => 252];
+            $periods = ['1日' => 1, '5日' => 5, '1ヶ月' => 21, '2ヶ月' => 42, '6ヶ月' => 126];
 
             echo '<div style="overflow-x:auto;">';
             echo '<table style="border-collapse:collapse;width:100%;font-size:13px;">';
