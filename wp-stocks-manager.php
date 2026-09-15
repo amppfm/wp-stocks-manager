@@ -9230,6 +9230,7 @@ function wp_stocks_settings_page() {
         'manual'      => '▶️ 手動実行',
         'maintenance' => '🧹 データメンテナンス',
         'api'         => '🔑 外部API連携',
+        'news'        => '📰 ニュースRSS',
         'signal'      => '🎯 複合シグナル判定',
     ];
     echo '<ul class="wp-stocks-settings-tabs" style="display:flex;gap:0;border-bottom:2px solid #0073aa;margin:0 0 20px 0;padding:0;list-style:none;flex-wrap:wrap;">';
@@ -9244,9 +9245,9 @@ function wp_stocks_settings_page() {
     echo '</ul>';
 
     // ------------------------------------------------------------------
-    // 【外部API連携タブ・前半】EDINETコードリスト／ニュースRSS（独立フォームのためform外に設置）
+    // 【手動実行タブ・前半】EDINETコードリスト（独立フォームのためform外に設置）
     // ------------------------------------------------------------------
-    echo '<div class="wp-stocks-settings-panel" data-panel="api" style="display:none;">';
+    echo '<div class="wp-stocks-settings-panel" data-panel="manual" style="display:none;">';
 
     // EDINETコードリスト アップロード（証券コード⇔EDINETコード 高速解決用キャッシュ）
     if (isset($_GET['message']) && $_GET['message'] === 'edinet_list_saved') {
@@ -9280,6 +9281,13 @@ function wp_stocks_settings_page() {
     echo '</form>';
     echo '</div>';
 
+    echo '</div>'; // end panel: manual (前半)
+
+    // ------------------------------------------------------------------
+    // 【ニュースRSSタブ】マーケット情報ページ用フィード設定（独立フォームのためform外に設置）
+    // ------------------------------------------------------------------
+    echo '<div class="wp-stocks-settings-panel" data-panel="news" style="display:none;">';
+
     echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;max-width:750px;">';
     echo '<h2 style="margin-top:0;">&#x1F4F0; ニュースRSS設定（マーケット情報ページ用）</h2>';
     echo '<p class="description">マーケット情報ページの「ニュース」タブに表示するRSSフィードを最大10件まで登録できます。タブ名・URLのどちらかが空欄のスロットは表示されません。</p>';
@@ -9299,7 +9307,7 @@ function wp_stocks_settings_page() {
     echo '</form>';
     echo '</div>';
 
-    echo '</div>'; // end panel: api (前半)
+    echo '</div>'; // end panel: news
 
     // ------------------------------------------------------------------
     // メイン設定フォーム（スケジュール／手動実行／メンテナンス／外部API連携後半／複合シグナル判定）
