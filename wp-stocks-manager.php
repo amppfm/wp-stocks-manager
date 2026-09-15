@@ -3056,18 +3056,21 @@ function wp_stocks_get_usd_jpy() {
     $cached = get_transient('wp_stocks_usd_jpy');
     if ($cached !== false) return floatval($cached);
 
-    $url = 'https://query1.finance.yahoo.com/v8/finance/chart/USDJPY=X?interval=1d&range=1d';
+    // ExchangeRate-API Open Access（APIキー不要・日次更新）
+    // 利用規約により出典表示が必要: https://www.exchangerate-api.com/docs/free
+    $url = 'https://open.er-api.com/v6/latest/USD';
     $response = wp_remote_get($url, [
-        'headers' => ['User-Agent' => 'Mozilla/5.0'],
+        'headers' => ['User-Agent' => 'wp-stocks-manager/1.0 (' . home_url() . ')'],
         'timeout' => 10,
     ]);
     if (is_wp_error($response)) return 150.0;
 
-    $body  = json_decode(wp_remote_retrieve_body($response), true);
-    $price = $body['chart']['result'][0]['meta']['regularMarketPrice'] ?? 0;
-    if ($price > 0) {
-        set_transient('wp_stocks_usd_jpy', $price, HOUR_IN_SECONDS);
-        return floatval($price);
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+    $rate = $body['rates']['JPY'] ?? 0;
+    if ($rate > 0) {
+        // Open Accessは日次更新のため、頻繁な再取得を避けてキャッシュを24時間に延長
+        set_transient('wp_stocks_usd_jpy', $rate, DAY_IN_SECONDS);
+        return floatval($rate);
     }
     return 150.0;
 }
@@ -9909,7 +9912,7 @@ function wp_stocks_settings_page() {
     $usd_jpy_current = wp_stocks_get_usd_jpy();
     echo '<tr><th>USD/JPY為替レート</th><td>';
     echo '<input type="number" name="usd_jpy_manual" value="' . esc_attr($usd_jpy_manual > 0 ? $usd_jpy_manual : '') . '" step="0.01" style="width:120px;" placeholder="自動取得"> 円';
-    echo '<p class="description">空欄の場合はYahoo Financeから自動取得します。現在のレート：<strong>' . number_format($usd_jpy_current, 2) . '円</strong><br>手動設定する場合は数値を入力（例：150.50）。クリアするには空欄で保存。</p>';
+    echo '<p class="description">空欄の場合はExchangeRate-API（open.er-api.com）から自動取得します。現在のレート：<strong>' . number_format($usd_jpy_current, 2) . '円</strong><br>手動設定する場合は数値を入力（例：150.50）。クリアするには空欄で保存。<br><span style="font-size:11px;color:#888;">為替レート提供: <a href="https://www.exchangerate-api.com" target="_blank" rel="noopener">ExchangeRate-API</a></span></p>';
     echo '</td></tr>';
 
     echo '</tbody></table>';
