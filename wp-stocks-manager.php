@@ -9222,6 +9222,32 @@ function wp_stocks_settings_page() {
 
     echo '<div class="wrap"><h1>⚙️ 設定</h1>';
 
+    // ------------------------------------------------------------------
+    // タブナビゲーション（スケジュール／手動実行／メンテナンス／外部API連携／複合シグナル判定）
+    // ------------------------------------------------------------------
+    $wss_tabs = [
+        'schedule'    => '⏰ スケジュール設定',
+        'manual'      => '▶️ 手動実行',
+        'maintenance' => '🧹 データメンテナンス',
+        'api'         => '🔑 外部API連携',
+        'signal'      => '🎯 複合シグナル判定',
+    ];
+    echo '<ul class="wp-stocks-settings-tabs" style="display:flex;gap:0;border-bottom:2px solid #0073aa;margin:0 0 20px 0;padding:0;list-style:none;flex-wrap:wrap;">';
+    $wss_first = true;
+    foreach ($wss_tabs as $wss_key => $wss_label) {
+        $wss_style = $wss_first
+            ? 'background:#0073aa;color:#fff;border:none;'
+            : 'background:#f1f1f1;color:#555;border:1px solid #ddd;border-bottom:none;';
+        echo '<li style="margin:0 2px 0 0;"><a href="#" class="wp-stocks-settings-tab" data-panel="' . esc_attr($wss_key) . '" style="display:block;padding:10px 18px;font-size:13px;font-weight:bold;text-decoration:none;border-radius:4px 4px 0 0;' . $wss_style . '">' . esc_html($wss_label) . '</a></li>';
+        $wss_first = false;
+    }
+    echo '</ul>';
+
+    // ------------------------------------------------------------------
+    // 【外部API連携タブ・前半】EDINETコードリスト／ニュースRSS（独立フォームのためform外に設置）
+    // ------------------------------------------------------------------
+    echo '<div class="wp-stocks-settings-panel" data-panel="api" style="display:none;">';
+
     // EDINETコードリスト アップロード（証券コード⇔EDINETコード 高速解決用キャッシュ）
     if (isset($_GET['message']) && $_GET['message'] === 'edinet_list_saved') {
         echo '<div class="updated"><p>EDINETコードリストを更新しました（' . intval($_GET['n'] ?? 0) . '件登録）。</p></div>';
@@ -9273,8 +9299,17 @@ function wp_stocks_settings_page() {
     echo '</form>';
     echo '</div>';
 
-    echo '<form method="post"><table class="form-table"><tbody>';
+    echo '</div>'; // end panel: api (前半)
+
+    // ------------------------------------------------------------------
+    // メイン設定フォーム（スケジュール／手動実行／メンテナンス／外部API連携後半／複合シグナル判定）
+    // ------------------------------------------------------------------
+    echo '<form method="post">';
     wp_nonce_field('wp_stocks_settings_nonce');
+
+    // ==== パネル：スケジュール設定 ====
+    echo '<div class="wp-stocks-settings-panel" data-panel="schedule" style="display:block;">';
+    echo '<table class="form-table"><tbody>';
 
     echo '<tr><th>株価取得時刻</th><td>';
     echo '<input type="time" name="fetch_time" value="' . esc_attr($fetch_time) . '" style="width:120px;">';
@@ -9285,51 +9320,6 @@ function wp_stocks_settings_page() {
     echo '<tr><th>テクニカル指標計算時刻</th><td>';
     echo '<input type="time" name="technical_time" value="' . esc_attr($technical_time) . '" style="width:120px;">';
     echo '<p class="description">毎日この時刻に日足データを取得してMA5/MA25/MACD/RSI/トレンドを計算します（株価取得の30分後推奨）。<br>次回実行予定：' . esc_html($next_tech_str) . '</p>';
-    echo '</td></tr>';
-
-    echo '<tr><th>株価データクリーンアップ</th><td>';
-    echo '<p class="description">毎日03:00に1年超の株価データを自動削除します。<br>';
-    echo '次回実行予定：' . esc_html($next_cleanup_str) . '<br>';
-    echo '現在の株価データ：' . number_format(intval($price_count)) . '件';
-    if ($oldest_price) echo '（最古：' . esc_html($oldest_price) . '）';
-    echo '</p>';
-    echo '<button type="submit" name="wp_stocks_manual_cleanup" class="button" style="margin-top:5px;" onclick="return confirm(\'1年超の株価データを今すぐ削除しますか？\');">今すぐクリーンアップ実行</button>';
-    echo '</td></tr>';
-    
-    echo '<tr><th>孤立データクリーンアップ</th><td>';
-    echo '<p class="description">削除済み銘柄に紐づく残骸データ（株価・テクニカル・適時開示・AI分析履歴）を削除します。<br>';
-    echo '現在の孤立データ：<strong' . ($orphan_total > 0 ? ' style="color:#e74c3c;"' : '') . '>' . number_format($orphan_total) . '件</strong>';
-    echo '（株価' . $orphan_prices . '・テクニカル' . $orphan_technicals . '・適時開示' . $orphan_news . '・AI履歴' . $orphan_ai . '）';
-    echo '</p>';
-    echo '<button type="submit" name="wp_stocks_cleanup_orphans" class="button"'
-        . ($orphan_total > 0 ? ' style="background:#e74c3c;color:#fff;border-color:#c0392b;"' : '')
-        . ' onclick="return confirm(\'削除済み銘柄に紐づく残骸データを削除しますか？\\nこの操作は取り消せません。\');">'
-        . '孤立データを今すぐ削除</button>';
-    echo '</td></tr>';
-    
-    echo '<tr><th>過去株価のバックフィル</th><td>';
-    echo '<p class="description">全銘柄の過去30日分の株価を日足データから補完します。<br>';
-    echo '再登録した銘柄でグラフが乱れている場合に実行してください（既存のレコードは上書きしません）。</p>';
-    $backfill_url = wp_nonce_url(admin_url('admin-post.php?action=backfill_all_prices'), 'wp_stocks_backfill_nonce');
-    echo '<a href="' . esc_url($backfill_url) . '" class="button button-primary" onclick="return confirm(\'全銘柄の過去30日分の株価を補完しますか？\\n銘柄数が多い場合は数分かかります。\');">過去30日分を今すぐ補完</a>';
-    echo '</td></tr>';
-
-    // 四季報からセクターを一括再抽出
-    $shikiho_count = intval($wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}stocks WHERE shikiho IS NOT NULL AND shikiho != ''"));
-    echo '<tr><th>セクター一括再抽出（四季報）</th><td>';
-    echo '<p class="description">四季報情報が登録済みの全銘柄（' . number_format($shikiho_count) . '件）について、';
-    echo '四季報1行目の「［ ］」内の文字列からセクターを再抽出し、上書き更新します。<br>';
-    echo '英語セクターのまま残っている既存銘柄の一括修正に使用してください。</p>';
-    echo '<button type="submit" name="wp_stocks_bulk_resector_shikiho" class="button button-primary" onclick="return confirm(\'四季報登録済みの' . $shikiho_count . '件について、セクターを再抽出して上書きしますか？\');">四季報からセクターを一括再抽出</button>';
-    echo '</td></tr>';
-    
-
-    $next_company     = wp_next_scheduled('wp_stocks_company_cron');
-    $next_company_str = $next_company ? (new DateTime('@' . $next_company))->setTimezone(new DateTimeZone('Asia/Tokyo'))->format('Y/m/d H:i:s') : '未設定';
-
-    echo '<tr><th>企業情報週次更新</th><td>';
-    echo '<p class="description">毎週日曜22:00にPER・PBR等の企業情報を自動更新します。<br>次回実行予定：' . esc_html($next_company_str) . '</p>';
-    echo '<button type="submit" name="wp_stocks_bulk_update" class="button" style="margin-top:5px;" onclick="return confirm(\'全銘柄の企業情報を今すぐ再取得しますか？\n銘柄数が多い場合は時間がかかります。\');">今すぐ全銘柄を一括更新</button>';
     echo '</td></tr>';
 
     // 米国株取得時刻
@@ -9349,81 +9339,7 @@ function wp_stocks_settings_page() {
     echo '<input type="time" name="us_technical_time" value="' . esc_attr($us_technical_time) . '" style="width:120px;">';
     echo '<p class="description">米国株取得の1時間後推奨（例：7:30）。<br>次回実行予定：' . esc_html($next_us_tech_str) . '</p>';
     echo '</td></tr>';
-    // EDINET APIキー設定
-    $edinet_api_key = get_option('wp_stocks_edinet_api_key', '');
-    echo '<tr><th>EDINET APIキー</th><td>';
-    echo '<input type="text" name="edinet_api_key" value="' . esc_attr($edinet_api_key) . '" style="width:350px;" placeholder="例：115c8e8db7654e1bbbda5de21c2f5a8a">';
-    echo '<p class="description">EDINETから財務データを取得するためのAPIキーです。<a href="https://disclosure2.edinet-fsa.go.jp/" target="_blank">EDINETサイト</a>で取得できます。</p>';
-    echo '</td></tr>';
-    // Webull App Key / App Secret設定
-    $webull_app_key = get_option('wp_stocks_webull_app_key', '');
-    $webull_app_secret = get_option('wp_stocks_webull_app_secret', '');
-    echo '<tr><th>Webull App Key</th><td>';
-    echo '<input type="text" name="webull_app_key" value="' . esc_attr($webull_app_key) . '" style="width:350px;" placeholder="Webull Developer PortalのAPP ID">';
-    echo '<p class="description">Webull OpenAPIの認証に使うApp Key（APP ID）です。<a href="https://developer.webull.com/" target="_blank">Webull Developer Portal</a>で取得できます。</p>';
-    echo '</td></tr>';
-    echo '<tr><th>Webull App Secret</th><td>';
-    echo '<input type="text" name="webull_app_secret" value="' . esc_attr($webull_app_secret) . '" style="width:350px;" placeholder="Webull Developer PortalのApp Secret">';
-    echo '<p class="description">Webull OpenAPIの署名生成に使うApp Secretです。オペレーション画面から確認・再発行できます。</p>';
-    echo '</td></tr>';
-    echo '<tr><th>Webull App Secret 最終更新日</th><td>';
-    $webull_secret_updated_at = get_option('wp_stocks_webull_secret_updated_at', '');
-    echo '<input type="date" name="webull_secret_updated_at" value="' . esc_attr($webull_secret_updated_at) . '" style="width:180px;">';
-    echo '<p class="description">Key生成・リセットを行った日を手動で記録してください（Webull側に有効期限の自動表示がないための代替管理です）。</p>';
-    echo '</td></tr>';
-    $webull_last_auth_error_at     = get_option('wp_stocks_webull_last_auth_error_at', '');
-    $webull_last_auth_error_detail = get_option('wp_stocks_webull_last_auth_error_detail', '');
-    if (!empty($webull_last_auth_error_at)) {
-        echo '<tr><th>&#x26A0;&#xFE0F; Webull認証エラー</th><td>';
-        echo '<p style="color:#b32d2e;">直近の認証エラー検知日時：' . esc_html($webull_last_auth_error_at) . '<br>詳細：' . esc_html($webull_last_auth_error_detail) . '</p>';
-        echo '<p class="description">App Secretの期限切れが原因の可能性があります。Webull管理画面でKeyをリセットし、上記App Secretとこのページの「最終更新日」を更新してください。</p>';
-        echo '</td></tr>';
-    }
-    echo '<tr><th>Webull疎通確認</th><td>';
-    $webull_test_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_fetch'), 'wp_stocks_webull_test');
-    $webull_test_url_aapl = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_fetch&symbol=AAPL&category=US_STOCK'), 'wp_stocks_webull_test');
-    echo '<a href="' . esc_url($webull_test_url) . '" class="button" target="_blank">7203の日足を取得(本番環境)</a> ';
-    echo '<a href="' . esc_url($webull_test_url_aapl) . '" class="button" target="_blank">AAPLの日足を取得(本番環境)</a>';
-    $webull_quotes_test_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_quotes_fetch'), 'wp_stocks_webull_test');
-    echo ' <a href="' . esc_url($webull_quotes_test_url) . '" class="button" target="_blank">7203のQuotes API疎通確認(Instrument+EOD)</a>';
-    $webull_single_bar_test_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_single_bar_fetch'), 'wp_stocks_webull_test');
-    echo ' <a href="' . esc_url($webull_single_bar_test_url) . '" class="button" target="_blank">7203の単一銘柄GET版疎通確認</a>';
-    $webull_ko_test_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_fetch&symbol=KO&category=US_STOCK'), 'wp_stocks_webull_test');
-    echo ' <a href="' . esc_url($webull_ko_test_url) . '" class="button" target="_blank">KO(NYSE)の日足を取得(本番環境)</a>';
-    echo '<p class="description">新しいタブでレスポンスの生JSONを表示します。保存済みのApp Key/Secretを使用します。</p>';
-    echo '</td></tr>';
-    echo '<tr><th>Webull/Yahoo 日足突き合わせ</th><td>';
-    $webull_compare_aapl_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_yahoo_compare&symbol=AAPL&category=US_STOCK&count=15'), 'wp_stocks_webull_yahoo_compare');
-    $webull_compare_ko_url   = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_yahoo_compare&symbol=KO&category=US_STOCK&count=15'), 'wp_stocks_webull_yahoo_compare');
-    $webull_compare_7203_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_yahoo_compare&symbol=7203&category=JP_STOCK&count=15'), 'wp_stocks_webull_yahoo_compare');
-    echo '<a href="' . esc_url($webull_compare_aapl_url) . '" class="button button-primary" target="_blank">AAPLで突き合わせ</a> ';
-    echo '<a href="' . esc_url($webull_compare_ko_url) . '" class="button" target="_blank">KOで突き合わせ</a> ';
-    echo '<a href="' . esc_url($webull_compare_7203_url) . '" class="button" target="_blank">7203で突き合わせ(参考・日本株は現状未対応)</a>';
-    echo '<p class="description">WebullとYahoo Financeの日足OHLCV・出来高を日付ごとに突き合わせ、差異があるセルを赤色でハイライト表示します。</p>';
-    echo '</td></tr>';
-    echo '<tr><th>Webullバッチ取得デバッグ（銘柄自由指定）</th><td>';
-    $webull_batch_debug_nonce = wp_create_nonce('wp_stocks_webull_test_batch');
-    echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
-    echo '<input type="text" id="wp_stocks_webull_debug_symbols" value="AAPL,MSFT,GOOG,TSLA,NVDA,META,AMZN,NFLX,AMD,INTC" style="width:420px;" placeholder="カンマ区切りで銘柄コードを入力（例：AAPL,MSFT,GOOG）">';
-    echo '<select id="wp_stocks_webull_debug_category"><option value="US_STOCK">US_STOCK</option><option value="JP_STOCK">JP_STOCK</option></select>';
-    echo '<input type="number" id="wp_stocks_webull_debug_count" value="10" min="1" max="1200" style="width:80px;" title="取得件数">';
-    echo '<button type="button" class="button button-primary" onclick="wpStocksOpenWebullBatchDebug()">バッチ取得デバッグ実行</button>';
-    echo '</div>';
-    echo '<p class="description">任意の銘柄の組み合わせで1回のバッチリクエストを送信し、リクエスト本文・生レスポンス・「レスポンスに含まれていなかった銘柄」の診断を新しいタブに表示します。特定銘柄の組み合わせでのみ失敗する現象の切り分けに使用してください。</p>';
-    echo '<script>
-    function wpStocksOpenWebullBatchDebug() {
-        var symbols  = document.getElementById("wp_stocks_webull_debug_symbols").value;
-        var category = document.getElementById("wp_stocks_webull_debug_category").value;
-        var count    = document.getElementById("wp_stocks_webull_debug_count").value;
-        var url = "' . esc_url(admin_url('admin-post.php')) . '?action=wp_stocks_webull_test_batch_fetch"
-            + "&symbols=" + encodeURIComponent(symbols)
-            + "&category=" + encodeURIComponent(category)
-            + "&count=" + encodeURIComponent(count)
-            + "&_wpnonce=' . esc_js($webull_batch_debug_nonce) . '";
-        window.open(url, "_blank");
-    }
-    </script>';
-    echo '</td></tr>';
+
     // 株価取得sleepを設定から取得
     $fetch_sleep_min = intval(get_option('wp_stocks_fetch_sleep_min', 3));
     $fetch_sleep_max = intval(get_option('wp_stocks_fetch_sleep_max', 8));
@@ -9432,6 +9348,13 @@ function wp_stocks_settings_page() {
     echo '最大：<input type="number" name="fetch_sleep_max" value="' . esc_attr($fetch_sleep_max) . '" min="1" max="60" style="width:60px;"> 秒';
     echo '<p class="description">銘柄間のランダムsleep時間（ブロック対策）。</p>';
     echo '</td></tr>';
+
+    echo '</tbody></table>';
+    echo '</div>'; // end panel: schedule
+
+    // ==== パネル：手動実行 ====
+    echo '<div class="wp-stocks-settings-panel" data-panel="manual" style="display:none;">';
+    echo '<table class="form-table"><tbody>';
 
     // 手動株価取得・テクニカル計算
     $jp_count = intval($wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}stocks WHERE (currency = 'JPY' OR currency IS NULL OR currency = '')"));
@@ -9468,6 +9391,95 @@ function wp_stocks_settings_page() {
     echo '<p class="description" style="margin-top:8px;">6ヶ月分の日足データを取得してMA5/MA25/MA75/MACD/RSI/トレンドを計算します。銘柄間に1〜2秒のsleepを挟みます。</p>';
     echo '</td></tr>';
 
+    echo '</tbody></table>';
+    echo '</div>'; // end panel: manual
+
+    // ==== パネル：データメンテナンス（前半・フォーム内） ====
+    echo '<div class="wp-stocks-settings-panel" data-panel="maintenance" style="display:none;">';
+    echo '<table class="form-table"><tbody>';
+
+    echo '<tr><th>株価データクリーンアップ</th><td>';
+    echo '<p class="description">毎日03:00に1年超の株価データを自動削除します。<br>';
+    echo '次回実行予定：' . esc_html($next_cleanup_str) . '<br>';
+    echo '現在の株価データ：' . number_format(intval($price_count)) . '件';
+    if ($oldest_price) echo '（最古：' . esc_html($oldest_price) . '）';
+    echo '</p>';
+    echo '<button type="submit" name="wp_stocks_manual_cleanup" class="button" style="margin-top:5px;" onclick="return confirm(\'1年超の株価データを今すぐ削除しますか？\');">今すぐクリーンアップ実行</button>';
+    echo '</td></tr>';
+    
+    echo '<tr><th>孤立データクリーンアップ</th><td>';
+    echo '<p class="description">削除済み銘柄に紐づく残骸データ（株価・テクニカル・適時開示・AI分析履歴）を削除します。<br>';
+    echo '現在の孤立データ：<strong' . ($orphan_total > 0 ? ' style="color:#e74c3c;"' : '') . '>' . number_format($orphan_total) . '件</strong>';
+    echo '（株価' . $orphan_prices . '・テクニカル' . $orphan_technicals . '・適時開示' . $orphan_news . '・AI履歴' . $orphan_ai . '）';
+    echo '</p>';
+    echo '<button type="submit" name="wp_stocks_cleanup_orphans" class="button"'
+        . ($orphan_total > 0 ? ' style="background:#e74c3c;color:#fff;border-color:#c0392b;"' : '')
+        . ' onclick="return confirm(\'削除済み銘柄に紐づく残骸データを削除しますか？\\nこの操作は取り消せません。\');">'
+        . '孤立データを今すぐ削除</button>';
+    echo '</td></tr>';
+    
+    echo '<tr><th>過去株価のバックフィル</th><td>';
+    echo '<p class="description">全銘柄の過去30日分の株価を日足データから補完します。<br>';
+    echo '再登録した銘柄でグラフが乱れている場合に実行してください（既存のレコードは上書きしません）。</p>';
+    $backfill_url = wp_nonce_url(admin_url('admin-post.php?action=backfill_all_prices'), 'wp_stocks_backfill_nonce');
+    echo '<a href="' . esc_url($backfill_url) . '" class="button button-primary" onclick="return confirm(\'全銘柄の過去30日分の株価を補完しますか？\\n銘柄数が多い場合は数分かかります。\');">過去30日分を今すぐ補完</a>';
+    echo '</td></tr>';
+
+    // 四季報からセクターを一括再抽出
+    $shikiho_count = intval($wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}stocks WHERE shikiho IS NOT NULL AND shikiho != ''"));
+    echo '<tr><th>セクター一括再抽出（四季報）</th><td>';
+    echo '<p class="description">四季報情報が登録済みの全銘柄（' . number_format($shikiho_count) . '件）について、';
+    echo '四季報1行目の「［ ］」内の文字列からセクターを再抽出し、上書き更新します。<br>';
+    echo '英語セクターのまま残っている既存銘柄の一括修正に使用してください。</p>';
+    echo '<button type="submit" name="wp_stocks_bulk_resector_shikiho" class="button button-primary" onclick="return confirm(\'四季報登録済みの' . $shikiho_count . '件について、セクターを再抽出して上書きしますか？\');">四季報からセクターを一括再抽出</button>';
+    echo '</td></tr>';
+
+    $next_company     = wp_next_scheduled('wp_stocks_company_cron');
+    $next_company_str = $next_company ? (new DateTime('@' . $next_company))->setTimezone(new DateTimeZone('Asia/Tokyo'))->format('Y/m/d H:i:s') : '未設定';
+
+    echo '<tr><th>企業情報週次更新</th><td>';
+    echo '<p class="description">毎週日曜22:00にPER・PBR等の企業情報を自動更新します。<br>次回実行予定：' . esc_html($next_company_str) . '</p>';
+    echo '<button type="submit" name="wp_stocks_bulk_update" class="button" style="margin-top:5px;" onclick="return confirm(\'全銘柄の企業情報を今すぐ再取得しますか？\n銘柄数が多い場合は時間がかかります。\');">今すぐ全銘柄を一括更新</button>';
+    echo '</td></tr>';
+
+    echo '</tbody></table>';
+    echo '</div>'; // end panel: maintenance（前半）
+
+    // ==== パネル：外部API連携（後半・フォーム内） ====
+    echo '<div class="wp-stocks-settings-panel" data-panel="api" style="display:none;">';
+    echo '<table class="form-table"><tbody>';
+
+    // EDINET APIキー設定
+    $edinet_api_key = get_option('wp_stocks_edinet_api_key', '');
+    echo '<tr><th>EDINET APIキー</th><td>';
+    echo '<input type="text" name="edinet_api_key" value="' . esc_attr($edinet_api_key) . '" style="width:350px;" placeholder="例：115c8e8db7654e1bbbda5de21c2f5a8a">';
+    echo '<p class="description">EDINETから財務データを取得するためのAPIキーです。<a href="https://disclosure2.edinet-fsa.go.jp/" target="_blank">EDINETサイト</a>で取得できます。</p>';
+    echo '</td></tr>';
+    // Webull App Key / App Secret設定
+    $webull_app_key = get_option('wp_stocks_webull_app_key', '');
+    $webull_app_secret = get_option('wp_stocks_webull_app_secret', '');
+    echo '<tr><th>Webull App Key</th><td>';
+    echo '<input type="text" name="webull_app_key" value="' . esc_attr($webull_app_key) . '" style="width:350px;" placeholder="Webull Developer PortalのAPP ID">';
+    echo '<p class="description">Webull OpenAPIの認証に使うApp Key（APP ID）です。<a href="https://developer.webull.com/" target="_blank">Webull Developer Portal</a>で取得できます。</p>';
+    echo '</td></tr>';
+    echo '<tr><th>Webull App Secret</th><td>';
+    echo '<input type="text" name="webull_app_secret" value="' . esc_attr($webull_app_secret) . '" style="width:350px;" placeholder="Webull Developer PortalのApp Secret">';
+    echo '<p class="description">Webull OpenAPIの署名生成に使うApp Secretです。オペレーション画面から確認・再発行できます。</p>';
+    echo '</td></tr>';
+    echo '<tr><th>Webull App Secret 最終更新日</th><td>';
+    $webull_secret_updated_at = get_option('wp_stocks_webull_secret_updated_at', '');
+    echo '<input type="date" name="webull_secret_updated_at" value="' . esc_attr($webull_secret_updated_at) . '" style="width:180px;">';
+    echo '<p class="description">Key生成・リセットを行った日を手動で記録してください（Webull側に有効期限の自動表示がないための代替管理です）。</p>';
+    echo '</td></tr>';
+    $webull_last_auth_error_at     = get_option('wp_stocks_webull_last_auth_error_at', '');
+    $webull_last_auth_error_detail = get_option('wp_stocks_webull_last_auth_error_detail', '');
+    if (!empty($webull_last_auth_error_at)) {
+        echo '<tr><th>&#x26A0;&#xFE0F; Webull認証エラー</th><td>';
+        echo '<p style="color:#b32d2e;">直近の認証エラー検知日時：' . esc_html($webull_last_auth_error_at) . '<br>詳細：' . esc_html($webull_last_auth_error_detail) . '</p>';
+        echo '<p class="description">App Secretの期限切れが原因の可能性があります。Webull管理画面でKeyをリセットし、上記App Secretとこのページの「最終更新日」を更新してください。<br>Webullの疎通確認・診断ツールは「APIデバッグ」ページに移動しました。</p>';
+        echo '</td></tr>';
+    }
+
     // 為替レート
     $usd_jpy_manual = get_option('wp_stocks_usd_jpy_manual', 0);
     $usd_jpy_current = wp_stocks_get_usd_jpy();
@@ -9475,7 +9487,12 @@ function wp_stocks_settings_page() {
     echo '<input type="number" name="usd_jpy_manual" value="' . esc_attr($usd_jpy_manual > 0 ? $usd_jpy_manual : '') . '" step="0.01" style="width:120px;" placeholder="自動取得"> 円';
     echo '<p class="description">空欄の場合はYahoo Financeから自動取得します。現在のレート：<strong>' . number_format($usd_jpy_current, 2) . '円</strong><br>手動設定する場合は数値を入力（例：150.50）。クリアするには空欄で保存。</p>';
     echo '</td></tr>';
+
     echo '</tbody></table>';
+    echo '</div>'; // end panel: api（後半）
+
+    // ==== パネル：複合シグナル判定 ====
+    echo '<div class="wp-stocks-settings-panel" data-panel="signal" style="display:none;">';
 
     // ★変更：複合シグナル判定まわりの設定をタブ化（重み／打診買い・売り条件／閾値）
     // オシレーター・ローソク足個別の閾値は対象外（要望により調整不要のため据え置き）
@@ -9500,7 +9517,7 @@ function wp_stocks_settings_page() {
         'oscillator_reversal_sell' => 'オシレーター反転確認（RSI買われ過ぎ＋陰線反転）',
     ];
 
-    echo '<div style="margin-top:25px;">';
+    echo '<div style="margin-top:0;">';
     echo '<h2 style="margin:0 0 10px 0;font-size:16px;">&#x1F3AF; 複合シグナル判定の設定</h2>';
     echo '<ul style="display:flex;gap:0;border-bottom:2px solid #0073aa;margin:0;padding:0;list-style:none;">';
     $csettings_tabs = ['weights' => '重み設定', 'tasin' => '打診買い/売り条件', 'thresholds' => '閾値設定'];
@@ -9557,13 +9574,16 @@ function wp_stocks_settings_page() {
     });
     </script>';
 
+    echo '</div>'; // end panel: signal
+
     echo '<p style="margin-top:20px;"><button type="submit" name="wp_stocks_save_settings" class="button button-primary">設定を保存</button></p>';
     echo '</form>';
 
-    // JPX業種別PER 手動取り込みボタン（独立フォーム）
+    // ==== パネル：データメンテナンス（後半・JPX業種別PERは独立フォームのためform外に設置） ====
+    echo '<div class="wp-stocks-settings-panel" data-panel="maintenance" style="display:none;">';
     $jpx_count = intval($wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}stock_jpx_sector_per"));
     $jpx_latest = $wpdb->get_var("SELECT MAX(year_month) FROM {$wpdb->prefix}stock_jpx_sector_per");
-    echo '<div style="margin-top:30px;padding:16px;background:#fff;border:1px solid #ddd;border-radius:8px;max-width:700px;">';
+    echo '<div style="padding:16px;background:#fff;border:1px solid #ddd;border-radius:8px;max-width:700px;">';
     echo '<h2 style="margin-top:0;">&#x1F4CA; JPX業種別PER（適正株価の算出に使用）</h2>';
     echo '<p class="description">東京証券取引所が公表する「規模別・業種別PER・PBR」を取り込み、適正株価計算時のセクター平均PERとして優先的に使用します（市場区分・業種が一致する日本株のみ対象）。現在の登録件数：' . number_format($jpx_count) . '件';
     if ($jpx_latest) echo '（最新：' . esc_html($jpx_latest) . '分）';
@@ -9573,6 +9593,30 @@ function wp_stocks_settings_page() {
     echo '<button type="submit" name="wp_stocks_jpx_sync" class="button button-primary">&#x1F504; JPX業種別PERを今すぐ取り込む</button>';
     echo '</form>';
     echo '</div>';
+    echo '</div>'; // end panel: maintenance（後半）
+
+    // ------------------------------------------------------------------
+    // タブ切り替えJS（トップレベルの5タブ）
+    // ------------------------------------------------------------------
+    echo '<script>
+    (function() {
+        var wssTabs   = document.querySelectorAll(".wp-stocks-settings-tab");
+        var wssPanels = document.querySelectorAll(".wp-stocks-settings-panel");
+        wssTabs.forEach(function(tab) {
+            tab.addEventListener("click", function(e) {
+                e.preventDefault();
+                wssTabs.forEach(function(t) {
+                    t.style.background = "#f1f1f1"; t.style.color = "#555"; t.style.border = "1px solid #ddd"; t.style.borderBottom = "none";
+                });
+                this.style.background = "#0073aa"; this.style.color = "#fff"; this.style.border = "none";
+                var target = this.dataset.panel;
+                wssPanels.forEach(function(p) {
+                    p.style.display = (p.dataset.panel === target) ? "block" : "none";
+                });
+            });
+        });
+    })();
+    </script>';
 
     echo '</div>';
 }
