@@ -9625,7 +9625,7 @@ function wp_stocks_settings_page() {
 // APIデバッグページ
 // --------------------------------------------------
 function wp_stocks_debug_page() {
-    echo '<div class="wrap"><h1>Yahoo Finance APIデバッグ</h1>';
+    echo '<div class="wrap"><h1>API診断（Yahoo Finance / Webull）</h1>';
     $symbol = isset($_GET['symbol']) ? sanitize_text_field($_GET['symbol']) : '7974.T';
     echo '<form method="get"><input type="hidden" name="page" value="wp-stocks-debug">';
     echo '<input type="text" name="symbol" value="' . esc_attr($symbol) . '" placeholder="例: 7974.T" style="width:150px;margin-right:8px;">';
@@ -9676,6 +9676,58 @@ function wp_stocks_debug_page() {
     } else {
         echo '<p style="color:red;">❌ Crumb取得失敗</p>';
     }
+
+    // --------------------------------------------------
+    // Webull診断（設定ページから移動）
+    // --------------------------------------------------
+    echo '<hr style="margin:30px 0;">';
+    echo '<h1>Webull API診断</h1>';
+
+    echo '<h2>Webull疎通確認</h2>';
+    $webull_test_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_fetch'), 'wp_stocks_webull_test');
+    $webull_test_url_aapl = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_fetch&symbol=AAPL&category=US_STOCK'), 'wp_stocks_webull_test');
+    echo '<a href="' . esc_url($webull_test_url) . '" class="button" target="_blank">7203の日足を取得(本番環境)</a> ';
+    echo '<a href="' . esc_url($webull_test_url_aapl) . '" class="button" target="_blank">AAPLの日足を取得(本番環境)</a>';
+    $webull_quotes_test_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_quotes_fetch'), 'wp_stocks_webull_test');
+    echo ' <a href="' . esc_url($webull_quotes_test_url) . '" class="button" target="_blank">7203のQuotes API疎通確認(Instrument+EOD)</a>';
+    $webull_single_bar_test_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_single_bar_fetch'), 'wp_stocks_webull_test');
+    echo ' <a href="' . esc_url($webull_single_bar_test_url) . '" class="button" target="_blank">7203の単一銘柄GET版疎通確認</a>';
+    $webull_ko_test_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_test_fetch&symbol=KO&category=US_STOCK'), 'wp_stocks_webull_test');
+    echo ' <a href="' . esc_url($webull_ko_test_url) . '" class="button" target="_blank">KO(NYSE)の日足を取得(本番環境)</a>';
+    echo '<p class="description">新しいタブでレスポンスの生JSONを表示します。保存済みのApp Key/Secretを使用します。</p>';
+
+    echo '<h2>Webull/Yahoo 日足突き合わせ</h2>';
+    $webull_compare_aapl_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_yahoo_compare&symbol=AAPL&category=US_STOCK&count=15'), 'wp_stocks_webull_yahoo_compare');
+    $webull_compare_ko_url   = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_yahoo_compare&symbol=KO&category=US_STOCK&count=15'), 'wp_stocks_webull_yahoo_compare');
+    $webull_compare_7203_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_webull_yahoo_compare&symbol=7203&category=JP_STOCK&count=15'), 'wp_stocks_webull_yahoo_compare');
+    echo '<a href="' . esc_url($webull_compare_aapl_url) . '" class="button button-primary" target="_blank">AAPLで突き合わせ</a> ';
+    echo '<a href="' . esc_url($webull_compare_ko_url) . '" class="button" target="_blank">KOで突き合わせ</a> ';
+    echo '<a href="' . esc_url($webull_compare_7203_url) . '" class="button" target="_blank">7203で突き合わせ(参考・日本株は現状未対応)</a>';
+    echo '<p class="description">WebullとYahoo Financeの日足OHLCV・出来高を日付ごとに突き合わせ、差異があるセルを赤色でハイライト表示します。</p>';
+
+    echo '<h2>Webullバッチ取得デバッグ（銘柄自由指定）</h2>';
+    $webull_batch_debug_nonce = wp_create_nonce('wp_stocks_webull_test_batch');
+    echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
+    echo '<input type="text" id="wp_stocks_webull_debug_symbols" value="AAPL,MSFT,GOOG,TSLA,NVDA,META,AMZN,NFLX,AMD,INTC" style="width:420px;" placeholder="カンマ区切りで銘柄コードを入力（例：AAPL,MSFT,GOOG）">';
+    echo '<select id="wp_stocks_webull_debug_category"><option value="US_STOCK">US_STOCK</option><option value="JP_STOCK">JP_STOCK</option></select>';
+    echo '<input type="number" id="wp_stocks_webull_debug_count" value="10" min="1" max="1200" style="width:80px;" title="取得件数">';
+    echo '<button type="button" class="button button-primary" onclick="wpStocksOpenWebullBatchDebug()">バッチ取得デバッグ実行</button>';
+    echo '</div>';
+    echo '<p class="description">任意の銘柄の組み合わせで1回のバッチリクエストを送信し、リクエスト本文・生レスポンス・「レスポンスに含まれていなかった銘柄」の診断を新しいタブに表示します。特定銘柄の組み合わせでのみ失敗する現象の切り分けに使用してください。</p>';
+    echo '<script>
+    function wpStocksOpenWebullBatchDebug() {
+        var symbols  = document.getElementById("wp_stocks_webull_debug_symbols").value;
+        var category = document.getElementById("wp_stocks_webull_debug_category").value;
+        var count    = document.getElementById("wp_stocks_webull_debug_count").value;
+        var url = "' . esc_url(admin_url('admin-post.php')) . '?action=wp_stocks_webull_test_batch_fetch"
+            + "&symbols=" + encodeURIComponent(symbols)
+            + "&category=" + encodeURIComponent(category)
+            + "&count=" + encodeURIComponent(count)
+            + "&_wpnonce=' . esc_js($webull_batch_debug_nonce) . '";
+        window.open(url, "_blank");
+    }
+    </script>';
+
     echo '</div>';
 }
 
