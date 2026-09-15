@@ -71,24 +71,42 @@ function wp_stocks_sector_ja($sector) {
 // --------------------------------------------------
 function wp_stocks_get_topix17_sector_map() {
     return [
-        '1617' => ['name' => 'NF・食品',           'sectors' => ['食料品']],
+        '1617' => ['name' => 'NF・食品',           'sectors' => ['水産・農林業', '食料品']],
         '1618' => ['name' => 'NF・エネルギー資源', 'sectors' => ['鉱業', '石油・石炭製品']],
-        '1619' => ['name' => 'NF・建設・資材',     'sectors' => ['建設業', 'ガラス・土石製品']],
+        '1619' => ['name' => 'NF・建設・資材',     'sectors' => ['建設業', '金属製品', 'ガラス・土石製品']],
         '1620' => ['name' => 'NF・素材・化学',     'sectors' => ['化学', '繊維製品', 'パルプ・紙', 'ゴム製品']],
         '1621' => ['name' => 'NF・医薬品',         'sectors' => ['医薬品']],
         '1622' => ['name' => 'NF・自動車・輸送機', 'sectors' => ['輸送用機器']],
-        '1623' => ['name' => 'NF・鉄鋼・非鉄',     'sectors' => ['鉄鋼', '非鉄金属', '金属製品']],
+        '1623' => ['name' => 'NF・鉄鋼・非鉄',     'sectors' => ['鉄鋼', '非鉄金属']],
         '1624' => ['name' => 'NF・機械',           'sectors' => ['機械']],
         '1625' => ['name' => 'NF・電機・精密',     'sectors' => ['電気機器', '精密機器']],
         '1626' => ['name' => 'NF・情報通信・サービス', 'sectors' => ['情報・通信業', 'サービス業', 'その他製品']],
         '1627' => ['name' => 'NF・電力・ガス',     'sectors' => ['電気・ガス業']],
-        '1628' => ['name' => 'NF・運輸・物流',     'sectors' => ['陸運業', '海運業']],
+        '1628' => ['name' => 'NF・運輸・物流',     'sectors' => ['陸運業', '海運業', '空運業', '倉庫・運輸関連業']],
         '1629' => ['name' => 'NF・商社・卸売',     'sectors' => ['卸売業']],
         '1630' => ['name' => 'NF・小売',           'sectors' => ['小売業']],
         '1631' => ['name' => 'NF・銀行',           'sectors' => ['銀行業']],
         '1632' => ['name' => 'NF・金融（除く銀行）', 'sectors' => ['保険業', '証券・商品先物取引業', 'その他金融業']],
         '1633' => ['name' => 'NF・不動産',         'sectors' => ['不動産業']],
     ];
+}
+
+// --------------------------------------------------
+// 東証33業種名 → TOPIX-17セクターコード の逆引き
+// マーケット情報ヒートマップ（日本株タブ）でTOPIX-17階層に集約するために使用
+// 対応表に存在しない（＝分類不能）業種名を渡された場合は null を返す
+// --------------------------------------------------
+function wp_stocks_sector33_to_topix17($sector33) {
+    static $reverse_map = null;
+    if ($reverse_map === null) {
+        $reverse_map = [];
+        foreach (wp_stocks_get_topix17_sector_map() as $topix17_code => $info) {
+            foreach ($info['sectors'] as $s33) {
+                $reverse_map[$s33] = $topix17_code;
+            }
+        }
+    }
+    return $reverse_map[$sector33] ?? null;
 }
 
 // --------------------------------------------------
@@ -3356,6 +3374,7 @@ function wp_stocks_manager_create_tables() {
         'screen_net_income' => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN screen_net_income TINYINT(1) DEFAULT 0 AFTER screen_op_profit",
         'screen_shikiho'    => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN screen_shikiho TINYINT(1) DEFAULT 0 AFTER screen_net_income",
         'is_sector_etf'     => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN is_sector_etf TINYINT(1) DEFAULT 0 AFTER sector",
+        'sector_override'   => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN sector_override VARCHAR(50) DEFAULT '' AFTER sector",
     ];
     foreach ($new_cols as $col => $sql) {
         if (!in_array($col, $columns)) $wpdb->query($sql);
@@ -4294,6 +4313,23 @@ add_action('admin_post_update_market_segment', function() {
         $wpdb->update($wpdb->prefix . 'stocks', ['market' => $segment], ['id' => $id]);
     }
     wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id . '&message=market_segment_saved'));
+    exit;
+});
+
+add_action('admin_post_update_sector_override', function() {
+    wp_stocks_require_admin_action('wp_stocks_sector_override_nonce');
+    global $wpdb;
+    $id       = intval($_POST['stock_id']);
+    $override = sanitize_text_field($_POST['sector_override'] ?? '');
+    $valid_sectors = [];
+    foreach (wp_stocks_get_topix17_sector_map() as $topix17_info) {
+        foreach ($topix17_info['sectors'] as $s33) $valid_sectors[] = $s33;
+    }
+    if ($override !== '' && !in_array($override, $valid_sectors, true)) $override = '';
+    if ($id) {
+        $wpdb->update($wpdb->prefix . 'stocks', ['sector_override' => $override], ['id' => $id]);
+    }
+    wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id . '&message=sector_override_saved'));
     exit;
 });
 
@@ -7802,6 +7838,30 @@ function wp_stocks_company_page() {
         echo '</select>';
         echo '<button type="submit" class="button button-primary">保存</button></form>';
     }
+    if (isset($_GET['message']) && $_GET['message'] === 'sector_override_saved') {
+        echo '<div class="updated"><p>業種（手動設定）を保存しました。</p></div>';
+    }
+    // 業種（手動設定・日本株のみ）：四季報の自動判定を上書きする。四季報一括再抽出でも上書きされない。
+    if (!$is_usd) {
+        echo '<h3 style="margin-top:25px;">&#x1F3F7;&#xFE0F; 業種（手動設定）</h3>';
+        echo '<p style="color:#666;font-size:13px;">四季報からの自動判定が実態と合わない場合（「その他」等）に、ここで33業種のいずれかを手動指定できます。指定するとこちらが優先され、「四季報からセクターを一括再抽出」を実行しても上書きされません。</p>';
+        echo '<form method="post" action="' . admin_url('admin-post.php') . '">';
+        echo '<input type="hidden" name="action" value="update_sector_override">';
+        echo '<input type="hidden" name="stock_id" value="' . esc_attr($id) . '">';
+        wp_nonce_field('wp_stocks_sector_override_nonce');
+        echo '<select name="sector_override" style="margin-right:10px;">';
+        echo '<option value="">自動（四季報から取得：' . esc_html($stock->sector ?: '未設定') . '）</option>';
+        foreach (wp_stocks_get_topix17_sector_map() as $topix17_code => $topix17_info) {
+            echo '<optgroup label="' . esc_attr($topix17_code . ' ' . $topix17_info['name']) . '">';
+            foreach ($topix17_info['sectors'] as $s33) {
+                $osel = ($stock->sector_override ?? '') === $s33 ? 'selected' : '';
+                echo '<option value="' . esc_attr($s33) . '" ' . $osel . '>' . esc_html($s33) . '</option>';
+            }
+            echo '</optgroup>';
+        }
+        echo '</select>';
+        echo '<button type="submit" class="button button-primary">保存</button></form>';
+    }
     if (isset($_GET['message']) && $_GET['message'] === 'screening_saved') {
         echo '<div class="updated"><p>スクリーニングフラグを保存しました。</p></div>';
     }
@@ -8444,8 +8504,14 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
     $us_sectors = [];
     $pf_sectors = [];
     foreach ($stocks as $s) {
-        $is_usd     = ($s->currency ?? 'JPY') === 'USD';
-        $sector_key = !empty($s->sector) ? $s->sector : 'その他';
+        $is_usd = ($s->currency ?? 'JPY') === 'USD';
+        if ($is_usd) {
+            $sector_key = !empty($s->sector) ? $s->sector : 'その他';
+        } else {
+            // 日本株：手動上書き（sector_override）があれば優先し、なければ四季報抽出値を使う
+            $effective_sector = !empty($s->sector_override) ? $s->sector_override : ($s->sector ?? '');
+            $sector_key = !empty($effective_sector) ? $effective_sector : 'その他';
+        }
         $sector_ja  = wp_stocks_sector_ja($sector_key);
         $score_data = wp_stocks_calc_score($s);
         $tech       = $tech_map[$s->id] ?? null;
@@ -8533,6 +8599,166 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
         }
     };
 
+    // --------------------------------------------------
+    // 日本株タブ専用：TOPIX-17（1617〜1633）→33業種→個別銘柄の階層マップ描画
+    // 対応表に一致しない（＝分類不能な）銘柄は末尾の「未分類」枠にまとめる
+    // --------------------------------------------------
+    $render_jp_hierarchy = function($jp_sectors) use ($tech_map, $price_map, $etf_stocks) {
+        if (empty($jp_sectors)) {
+            echo '<p style="color:#888;padding:20px;">データがありません。</p>';
+            return;
+        }
+
+        $topix17_map = wp_stocks_get_topix17_sector_map();
+
+        // TOPIX-17セクターETF自体の価格・騰落率（ベンチマークとして見出しに併記する）
+        $etf_price_map = [];
+        foreach ($etf_stocks as $es) {
+            $p = $price_map[$es->id] ?? null;
+            if ($p && ($p->previous_close ?? 0) > 0) {
+                $etf_price_map[$es->code] = [
+                    'price' => $p->price,
+                    'pct'   => ($p->price - $p->previous_close) / $p->previous_close * 100,
+                ];
+            } else {
+                $etf_price_map[$es->code] = ['price' => null, 'pct' => null];
+            }
+        }
+
+        $tile_html = function($s) use ($tech_map, $price_map) {
+            $score_data = wp_stocks_calc_score($s);
+            $sc         = $score_data['score'];
+            $jc         = $score_data['judgment']['color'];
+            $tech       = $tech_map[$s->id] ?? null;
+            $detail_url = admin_url('admin.php?page=wp-stocks-company&stock_id=' . $s->id);
+            $price      = $price_map[$s->id] ?? null;
+
+            $pct_change = null;
+            if ($price && ($price->previous_close ?? 0) > 0) {
+                $pct_change = ($price->price - $price->previous_close) / $price->previous_close * 100;
+            }
+            $heat_bg = ($pct_change !== null) ? wp_stocks_change_heat_color($pct_change) : '#aaa';
+
+            echo '<div style="background:' . $heat_bg . ';border-radius:6px;padding:8px 12px;min-width:140px;color:#fff;">';
+            echo '<div style="font-size:11px;opacity:0.85;">' . esc_html($s->code) . '</div>';
+            echo '<div style="font-weight:bold;font-size:13px;"><a href="' . esc_url($detail_url) . '" style="text-decoration:none;color:#fff;">' . esc_html($s->name) . '</a></div>';
+            if ($price) {
+                $price_disp = number_format($price->price) . '円';
+                $pct_disp   = ($pct_change !== null) ? (($pct_change >= 0 ? '+' : '') . number_format($pct_change, 2) . '%') : '-';
+                echo '<div style="font-size:12px;margin-top:2px;">' . $price_disp . ' <strong>' . $pct_disp . '</strong></div>';
+            } else {
+                echo '<div style="font-size:12px;margin-top:2px;opacity:0.7;">未取得</div>';
+            }
+            echo '<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;">';
+            echo '<span style="background:rgba(255,255,255,0.85);color:' . $jc . ';font-weight:bold;font-size:11px;padding:1px 6px;border-radius:3px;">' . $sc . '点</span>';
+            if ($tech) {
+                echo '<span style="background:rgba(255,255,255,0.85);border-radius:3px;padding:1px 6px;">' . wp_stocks_trend_icon_html($tech) . '</span>';
+            }
+            echo '</div></div>';
+        };
+
+        $avg_pct_of = function($stock_list) use ($price_map) {
+            $list = [];
+            foreach ($stock_list as $s) {
+                $p = $price_map[$s->id] ?? null;
+                if ($p && ($p->previous_close ?? 0) > 0) {
+                    $list[] = ($p->price - $p->previous_close) / $p->previous_close * 100;
+                }
+            }
+            return !empty($list) ? array_sum($list) / count($list) : null;
+        };
+
+        // 33業種バケットをTOPIX-17コードごとにグルーピング。対応表に無いものは未分類へ。
+        $grouped       = [];
+        $unclassified  = [];
+        foreach ($jp_sectors as $sector33 => $data) {
+            $topix17_code = wp_stocks_sector33_to_topix17($sector33);
+            if ($topix17_code === null) {
+                foreach ($data['stocks'] as $s) $unclassified[] = $s;
+                continue;
+            }
+            $grouped[$topix17_code][$sector33] = $data;
+        }
+        ksort($grouped);
+
+        foreach ($grouped as $topix17_code => $sub_sectors) {
+            ksort($sub_sectors);
+            $group_stocks = [];
+            foreach ($sub_sectors as $data) $group_stocks = array_merge($group_stocks, $data['stocks']);
+
+            $group_avg_pct = $avg_pct_of($group_stocks);
+            $group_color   = $group_avg_pct !== null ? wp_stocks_change_heat_color($group_avg_pct) : '#aaa';
+            $topix17_name  = $topix17_map[$topix17_code]['name'] ?? $topix17_code;
+            $etf_info      = $etf_price_map[$topix17_code] ?? null;
+            $panel_id      = 'wss-topix17-' . $topix17_code;
+
+            echo '<div style="border:1px solid #ddd;border-radius:8px;margin-bottom:16px;overflow:hidden;">';
+            echo '<div class="wp-stocks-topix17-header" data-target="' . esc_attr($panel_id) . '" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer;background:' . $group_color . ';color:#fff;">';
+            echo '<div style="display:flex;align-items:center;gap:8px;">';
+            echo '<span class="wss-topix17-caret" style="display:inline-block;transition:transform 0.2s;">&#x25BC;</span>';
+            echo '<strong style="font-size:15px;">' . esc_html($topix17_code) . ' ' . esc_html($topix17_name) . '</strong>';
+            echo '<span style="font-size:12px;opacity:0.85;">（' . count($group_stocks) . '銘柄）</span>';
+            echo '</div>';
+            echo '<div style="display:flex;align-items:center;gap:14px;">';
+            if ($etf_info && $etf_info['price'] !== null) {
+                $etf_pct_str = ($etf_info['pct'] >= 0 ? '+' : '') . number_format($etf_info['pct'], 2) . '%';
+                echo '<span style="font-size:12px;opacity:0.9;">ETF ' . number_format($etf_info['price']) . '円　' . esc_html($etf_pct_str) . '</span>';
+            }
+            echo '<span style="font-size:14px;font-weight:bold;">' . ($group_avg_pct !== null ? (($group_avg_pct >= 0 ? '+' : '') . number_format($group_avg_pct, 2) . '%') : '-') . '</span>';
+            echo '</div></div>';
+
+            echo '<div id="' . esc_attr($panel_id) . '" style="padding:12px 16px;">';
+            foreach ($sub_sectors as $sector33 => $data) {
+                $sub_avg_pct = $avg_pct_of($data['stocks']);
+                $sub_color   = $sub_avg_pct !== null ? wp_stocks_change_heat_color($sub_avg_pct) : '#888';
+
+                echo '<div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 6px;">';
+                echo '<span style="font-size:13px;color:#555;">' . esc_html($sector33) . ' <span style="color:#999;">（' . count($data['stocks']) . '銘柄）</span></span>';
+                echo '<span style="font-size:12px;font-weight:bold;color:' . $sub_color . ';">' . ($sub_avg_pct !== null ? (($sub_avg_pct >= 0 ? '+' : '') . number_format($sub_avg_pct, 2) . '%') : '-') . '</span>';
+                echo '</div>';
+
+                echo '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">';
+                foreach ($data['stocks'] as $s) $tile_html($s);
+                echo '</div>';
+            }
+            echo '</div></div>';
+        }
+
+        if (!empty($unclassified)) {
+            echo '<div style="border:1px dashed #ccc;border-radius:8px;padding:12px 16px;margin-top:8px;">';
+            echo '<div style="font-size:13px;color:#888;margin-bottom:8px;">未分類（' . count($unclassified) . '銘柄）　'
+                . '<span style="font-size:12px;">四季報から業種を判定できなかった銘柄です。各銘柄の編集タブ「業種（手動設定）」から分類してください。</span></div>';
+            echo '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+            foreach ($unclassified as $s) {
+                $detail_url = admin_url('admin.php?page=wp-stocks-company&stock_id=' . $s->id . '&tab=edit');
+                echo '<a href="' . esc_url($detail_url) . '" style="text-decoration:none;">';
+                echo '<div style="background:#eee;border-radius:6px;padding:6px 10px;font-size:12px;color:#555;">' . esc_html($s->code) . ' ' . esc_html($s->name) . '</div>';
+                echo '</a>';
+            }
+            echo '</div></div>';
+        }
+
+        echo '<script>
+        (function(){
+            var headers = document.querySelectorAll(".wp-stocks-topix17-header");
+            headers.forEach(function(h){
+                h.addEventListener("click", function(){
+                    var body = document.getElementById(this.dataset.target);
+                    var caret = this.querySelector(".wss-topix17-caret");
+                    if (!body) return;
+                    if (body.style.display === "none") {
+                        body.style.display = "block";
+                        if (caret) caret.style.transform = "rotate(0deg)";
+                    } else {
+                        body.style.display = "none";
+                        if (caret) caret.style.transform = "rotate(-90deg)";
+                    }
+                });
+            });
+        })();
+        </script>';
+    };
+
     // ============================================================
     // 描画
     // ============================================================
@@ -8568,7 +8794,7 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
     echo '</div>';
 
     if ($tab === 'jp') {
-        $render_sectors($jp_sectors, '#e74c3c');
+        $render_jp_hierarchy($jp_sectors);
     } elseif ($tab === 'us') {
         $render_sectors($us_sectors, '#3498db');
     } elseif ($tab === 'etf') {
