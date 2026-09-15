@@ -110,6 +110,34 @@ function wp_stocks_sector33_to_topix17($sector33) {
 }
 
 // --------------------------------------------------
+// TOPIX-17セクターETFの日次価格履歴を取得（stock_id => [['date','price','previous_close'], ...] 昇順）
+// マーケット情報ヒートマップの「カレンダー」「期間別」タブで使用
+// --------------------------------------------------
+function wp_stocks_get_etf_price_history($etf_stocks, $days = 95) {
+    global $wpdb;
+    if (empty($etf_stocks)) return [];
+    $ids = array_map(fn($s) => $s->id, $etf_stocks);
+    $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+    $cutoff = date('Y-m-d', strtotime('-' . intval($days) . ' days'));
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT stock_id, DATE(datetime) AS d, price, previous_close
+         FROM {$wpdb->prefix}stock_prices
+         WHERE stock_id IN ($placeholders) AND DATE(datetime) >= %s
+         ORDER BY stock_id ASC, d ASC",
+        array_merge($ids, [$cutoff])
+    ));
+    $history = [];
+    foreach ($rows as $r) {
+        $history[$r->stock_id][] = [
+            'date'           => $r->d,
+            'price'          => (float) $r->price,
+            'previous_close' => (float) $r->previous_close,
+        ];
+    }
+    return $history;
+}
+
+// --------------------------------------------------
 // 四季報情報の1行目「［ ］」内の文字列をセクター名として抽出
 // 例: 9519　(株)レノバ　れのば　［ 電気・ガス業 ］ → 電気・ガス業
 // --------------------------------------------------
@@ -8483,7 +8511,7 @@ function wp_stocks_sector_accumulate(&$bucket, $sector_ja, $s, $score_data, $tec
 function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
     global $wpdb;
 
-    $tab      = in_array($_GET['tab'] ?? '', ['jp', 'us', 'portfolio', 'etf']) ? $_GET['tab'] : 'jp';
+    $tab      = in_array($_GET['tab'] ?? '', ['jp', 'us', 'portfolio', 'etf', 'calendar', 'period']) ? $_GET['tab'] : 'jp';
     $base_url = $custom_base_url ?: admin_url('admin.php?page=wp-stocks-sector');
 
     $stocks    = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE is_sector_etf = 0 ORDER BY sector, id");
@@ -8770,7 +8798,9 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
         'jp'        => '&#x1F1EF;&#x1F1F5; 日本株（' . array_sum(array_map(fn($d) => count($d['stocks']), $jp_sectors)) . '銘柄）',
         'us'        => '&#x1F1FA;&#x1F1F8; 米国株（' . array_sum(array_map(fn($d) => count($d['stocks']), $us_sectors)) . '銘柄）',
         'portfolio' => '&#x1F4C1; ポートフォリオ（' . array_sum(array_map(fn($d) => count($d['stocks']), $pf_sectors)) . '銘柄）',
-        'etf'       => '&#x1F3ED; TOPIX-17（' . count($etf_stocks) . '銘柄）',
+        'etf'       => '&#x1F3C6; ランキング',
+        'calendar'  => '&#x1F4C5; カレンダー',
+        'period'    => '&#x23F1;&#xFE0F; 期間別',
     ] as $key => $label) {
         $active = $tab === $key;
         $url    = $base_url . '&tab=' . $key;
@@ -8782,7 +8812,8 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
 
     echo '<div style="background:#fff;border:1px solid #ddd;border-top:none;padding:20px;margin-bottom:20px;">';
 
-    // 凡例（前日比の色分け）を上部に表示
+    // 凡例（前日比の色分け）を上部に表示（日本株/米国株/ポートフォリオ/ランキングタブのみ）
+    if (in_array($tab, ['jp', 'us', 'portfolio', 'etf'], true)) {
     echo '<div style="margin-bottom:20px;padding:12px;background:#f8f9fa;border-radius:6px;font-size:12px;color:#555;">';
     echo '<strong>凡例：</strong> ';
     echo '<span style="display:inline-block;background:rgb(40,220,40);color:#fff;padding:2px 10px;border-radius:3px;margin-right:5px;">&#x25B2;+5%以上</span>';
@@ -8792,50 +8823,209 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
     echo '<span style="display:inline-block;background:rgb(220,40,40);color:#fff;padding:2px 10px;border-radius:3px;margin-right:5px;">&#x25BC;-5%以上</span>';
     echo '<span style="display:inline-block;background:#aaa;color:#fff;padding:2px 10px;border-radius:3px;">未取得</span>';
     echo '</div>';
+    }
 
     if ($tab === 'jp') {
         $render_jp_hierarchy($jp_sectors);
     } elseif ($tab === 'us') {
         $render_sectors($us_sectors, '#3498db');
     } elseif ($tab === 'etf') {
-        // ★移植：TOPIX-17セクターETFタブ（旧wp_stocks_render_heatmap_tab()の該当ロジックを移植）
+        // TOPIX-17セクター指数ランキング（実際のETF価格ベース、騰落率順に全17件を1列表示）
         if (empty($etf_stocks)) {
             echo '<p style="color:#888;padding:20px;">TOPIX-17セクターETFが登録されていません。</p>';
         } else {
             $topix17_map = wp_stocks_get_topix17_sector_map();
-            echo '<div style="display:grid;grid-template-columns:repeat(5, 1fr);gap:6px;">';
+            $ranking = [];
             foreach ($etf_stocks as $s) {
-                $p           = $price_map[$s->id] ?? null;
-                $detail_url  = admin_url('admin.php?page=wp-stocks-company&stock_id=' . $s->id);
-                $map_info    = $topix17_map[$s->code] ?? null;
-                $sector_note = $map_info ? implode('・', $map_info['sectors']) : '';
-                if ($p && $p->previous_close > 0) {
-                    $pct      = ($p->price - $p->previous_close) / $p->previous_close * 100;
-                    $bg_color = wp_stocks_change_heat_color($pct);
-                    $sub      = number_format($p->price) . '円' . ($sector_note ? '（' . $sector_note . '）' : '');
+                $p        = $price_map[$s->id] ?? null;
+                $map_info = $topix17_map[$s->code] ?? null;
+                $label    = $map_info['name'] ?? $s->name;
+                if ($p && ($p->previous_close ?? 0) > 0) {
+                    $pct   = ($p->price - $p->previous_close) / $p->previous_close * 100;
+                    $price = $p->price;
                 } else {
-                    $pct      = 0;
-                    $bg_color = '#aaa';
-                    $sub      = '未取得' . ($sector_note ? '（' . $sector_note . '）' : '');
+                    $pct   = null;
+                    $price = null;
                 }
-                $pct_str = ($pct >= 0 ? '+' : '') . number_format($pct, 2) . '%';
-                echo '<a href="' . esc_url($detail_url) . '" style="text-decoration:none;">';
-                echo '<div style="background:' . $bg_color . ';border-radius:6px;padding:10px 8px;text-align:center;'
-                    . 'color:#fff;min-height:80px;display:flex;flex-direction:column;'
-                    . 'justify-content:center;align-items:center;gap:3px;cursor:pointer;transition:opacity 0.2s;"'
-                    . ' onmouseover="this.style.opacity=\'0.8\'" onmouseout="this.style.opacity=\'1\'">';
-                echo '<div style="font-size:11px;opacity:0.85;">' . esc_html($s->code) . '</div>';
-                echo '<div style="font-size:12px;font-weight:bold;line-height:1.3;">' . esc_html(mb_substr($s->name, 0, 8)) . '</div>';
-                echo '<div style="font-size:14px;font-weight:bold;">' . esc_html($pct_str) . '</div>';
-                if ($sub) echo '<div style="font-size:10px;opacity:0.85;">' . esc_html($sub) . '</div>';
+                $ranking[] = [
+                    'id'    => $s->id,
+                    'code'  => $s->code,
+                    'label' => $label,
+                    'pct'   => $pct,
+                    'price' => $price,
+                ];
+            }
+            // 騰落率降順（未取得はnullとして最後尾）
+            usort($ranking, function($a, $b) {
+                if ($a['pct'] === null && $b['pct'] === null) return 0;
+                if ($a['pct'] === null) return 1;
+                if ($b['pct'] === null) return -1;
+                return $b['pct'] <=> $a['pct'];
+            });
+
+            echo '<div style="max-width:520px;">';
+            echo '<div style="background:#222;color:#fff;padding:8px 14px;font-size:13px;font-weight:bold;border-radius:6px 6px 0 0;">'
+                . '&#x1F3C6; TOPIX-17業種別指数 ランキング（更新日時：' . esc_html(date('Y/m/d H:i')) . '）</div>';
+            echo '<div style="border:1px solid #ddd;border-top:none;border-radius:0 0 6px 6px;overflow:hidden;">';
+            foreach ($ranking as $i => $row) {
+                $detail_url = admin_url('admin.php?page=wp-stocks-company&stock_id=' . $row['id']);
+                if ($row['pct'] === null) {
+                    $row_bg   = '#f5f5f5';
+                    $pct_bg   = '#999';
+                    $pct_str  = '未取得';
+                } else {
+                    $up      = $row['pct'] >= 0;
+                    $row_bg  = $up ? '#eaf7ee' : '#fdecec';
+                    $pct_bg  = $up ? '#2ecc71' : '#e74c3c';
+                    $pct_str = ($up ? '&#x25B2;' : '&#x25BC;') . number_format(abs($row['pct']), 2) . '%';
+                }
+                $price_str = $row['price'] !== null ? number_format($row['price']) : '-';
+
+                echo '<a href="' . esc_url($detail_url) . '" style="text-decoration:none;color:inherit;">';
+                echo '<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:' . $row_bg . ';'
+                    . ($i > 0 ? 'border-top:1px solid #eee;' : '') . '">';
+                echo '<span style="background:' . $pct_bg . ';color:#fff;font-size:12px;font-weight:bold;padding:2px 8px;border-radius:4px;min-width:64px;text-align:center;">' . $pct_str . '</span>';
+                echo '<span style="flex:1;font-size:13px;color:#333;">' . esc_html($row['label']) . '</span>';
+                echo '<span style="font-size:12px;color:#666;">' . $price_str . '</span>';
                 echo '</div></a>';
             }
-            echo '</div>';
+            echo '</div></div>';
+        }
+    } elseif ($tab === 'calendar') {
+        // TOPIX-17業種別 日次騰落率カレンダー（2ヶ月分の枠、データが無い日は空欄）
+        $etf_history = wp_stocks_get_etf_price_history($etf_stocks, 65);
+        if (empty($etf_stocks) || empty($etf_history)) {
+            echo '<p style="color:#888;padding:20px;">データがありません。</p>';
+        } else {
+            $topix17_map = wp_stocks_get_topix17_sector_map();
+            $cols = [];
+            foreach ($etf_stocks as $s) {
+                $name  = $topix17_map[$s->code]['name'] ?? $s->name;
+                $cols[$s->code] = ['id' => $s->id, 'label' => str_replace('NF・', '', $name)];
+            }
+            ksort($cols);
+
+            // 日付ごと・コードごとの騰落率
+            $pct_by_date = [];
+            $date_set    = [];
+            foreach ($cols as $code => $c) {
+                foreach ($etf_history[$c['id']] ?? [] as $row) {
+                    if ($row['previous_close'] > 0) {
+                        $pct_by_date[$row['date']][$code] = ($row['price'] - $row['previous_close']) / $row['previous_close'] * 100;
+                        $date_set[$row['date']] = true;
+                    }
+                }
+            }
+            krsort($date_set);
+            $dates = array_slice(array_keys($date_set), 0, 44); // 2ヶ月分の枠（営業日ベース上限）
+
+            // 連続日数（直近日を起点に同方向が何日続いているか。営業日ベースで判定）
+            $dates_asc = array_reverse($dates);
+            $streaks   = [];
+            foreach ($cols as $code => $c) {
+                $streak = 0;
+                $prev_sign = null;
+                foreach ($dates_asc as $d) {
+                    $pct = $pct_by_date[$d][$code] ?? null;
+                    if ($pct === null) { $streak = 0; $prev_sign = null; continue; }
+                    $sign = $pct >= 0 ? 1 : -1;
+                    $streak = ($sign === $prev_sign) ? $streak + 1 : 1;
+                    $prev_sign = $sign;
+                }
+                $streaks[$code] = $streak;
+            }
+
+            $cell_style = function($pct) {
+                if ($pct === null) return ['bg' => '#f7f7f7', 'fg' => '#ccc'];
+                $mag = min(abs($pct), 3) / 3; // 3%で最大濃度に正規化
+                if ($pct >= 0) {
+                    return ['bg' => 'rgba(46,204,113,' . round(0.15 + 0.55 * $mag, 2) . ')', 'fg' => '#1e7e34'];
+                }
+                return ['bg' => 'rgba(231,76,60,' . round(0.15 + 0.55 * $mag, 2) . ')', 'fg' => '#b02a1e'];
+            };
+
+            echo '<div style="overflow-x:auto;">';
+            echo '<table style="border-collapse:collapse;font-size:11px;white-space:nowrap;">';
+            echo '<tr>';
+            echo '<th style="padding:4px 8px;background:#fafafa;border:1px solid #eee;position:sticky;left:0;z-index:1;">業種</th>';
+            foreach ($cols as $c) {
+                echo '<th style="padding:4px 4px;background:#fafafa;border:1px solid #eee;writing-mode:vertical-rl;text-orientation:upright;font-weight:normal;height:92px;">' . esc_html($c['label']) . '</th>';
+            }
+            echo '</tr>';
+            echo '<tr>';
+            echo '<th style="padding:4px 8px;background:#fafafa;border:1px solid #eee;position:sticky;left:0;z-index:1;">連続</th>';
+            foreach ($cols as $code => $c) {
+                $st = $streaks[$code] ?? 0;
+                echo '<td style="padding:4px;text-align:center;border:1px solid #eee;color:#1e7e34;font-weight:bold;">' . ($st >= 2 ? $st : '') . '</td>';
+            }
+            echo '</tr>';
+            foreach ($dates as $d) {
+                echo '<tr>';
+                echo '<th style="padding:4px 8px;background:#fafafa;border:1px solid #eee;position:sticky;left:0;z-index:1;font-weight:normal;">' . esc_html(date('m/d', strtotime($d))) . '</th>';
+                foreach ($cols as $code => $c) {
+                    $pct   = $pct_by_date[$d][$code] ?? null;
+                    $style = $cell_style($pct);
+                    $disp  = $pct !== null ? number_format($pct, 2) . '%' : '';
+                    echo '<td style="padding:4px;text-align:center;border:1px solid #eee;background:' . $style['bg'] . ';color:' . $style['fg'] . ';">' . esc_html($disp) . '</td>';
+                }
+                echo '</tr>';
+            }
+            echo '</table></div>';
+        }
+    } elseif ($tab === 'period') {
+        // TOPIX-17業種別 期間別騰落率（1日/5日/1ヶ月/2ヶ月/1年）。データ不足の期間は「-」表示
+        $etf_history = wp_stocks_get_etf_price_history($etf_stocks, 400);
+        if (empty($etf_stocks)) {
+            echo '<p style="color:#888;padding:20px;">データがありません。</p>';
+        } else {
+            $topix17_map = wp_stocks_get_topix17_sector_map();
+            $periods = ['1日' => 1, '5日' => 5, '1ヶ月' => 21, '2ヶ月' => 42, '1年' => 252];
+
+            echo '<div style="overflow-x:auto;">';
+            echo '<table style="border-collapse:collapse;width:100%;font-size:13px;">';
+            echo '<tr style="background:#222;color:#fff;">';
+            echo '<th style="padding:8px 12px;text-align:left;">業種</th>';
+            foreach (array_keys($periods) as $label) {
+                echo '<th style="padding:8px 12px;text-align:right;">' . esc_html($label) . '</th>';
+            }
+            echo '</tr>';
+
+            foreach ($etf_stocks as $i => $s) {
+                $name   = $topix17_map[$s->code]['name'] ?? $s->name;
+                $short  = str_replace('NF・', '', $name);
+                $series = $etf_history[$s->id] ?? [];
+                $n      = count($series);
+                $row_bg = $i % 2 === 0 ? '#fff' : '#f9f9f9';
+
+                echo '<tr style="background:' . $row_bg . ';">';
+                echo '<td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:bold;">' . esc_html($short) . '</td>';
+
+                foreach ($periods as $back) {
+                    $pct = null;
+                    if ($n > 0) {
+                        $latest = $series[$n - 1];
+                        $idx    = $n - 1 - $back;
+                        if ($idx >= 0 && $series[$idx]['price'] > 0) {
+                            $pct = ($latest['price'] - $series[$idx]['price']) / $series[$idx]['price'] * 100;
+                        }
+                    }
+                    if ($pct === null) {
+                        echo '<td style="padding:8px 12px;text-align:right;border-bottom:1px solid #eee;color:#ccc;">-</td>';
+                    } else {
+                        $color = $pct >= 0 ? '#1e7e34' : '#c0392b';
+                        $sign  = $pct >= 0 ? '+' : '';
+                        echo '<td style="padding:8px 12px;text-align:right;border-bottom:1px solid #eee;color:' . $color . ';font-weight:bold;">' . $sign . number_format($pct, 2) . '%</td>';
+                    }
+                }
+                echo '</tr>';
+            }
+            echo '</table></div>';
         }
     } else {
         $render_sectors($pf_sectors, '#27ae60');
     }
     echo '</div>';
+
 
     if (!$skip_wrap) echo '</div>';
 }
