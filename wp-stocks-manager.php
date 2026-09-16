@@ -5001,7 +5001,8 @@ function wp_stocks_dashboard_page() {
     $base_url      = admin_url('admin.php?page=wp-stocks-dashboard');
 
     // 全銘柄取得（TOPIX-17セクターETFは除外）
-    $all_stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE status = 'watch' AND is_sector_etf = 0 ORDER BY id ASC");
+    // 2026-09-17: ウォッチ中銘柄に加えて保有中(portfolio)銘柄もダッシュボードの絞り込み対象に含める
+    $all_stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE status IN ('watch','portfolio') AND is_sector_etf = 0 ORDER BY id ASC");
 
     // テクニカルデータを一括取得
     $tech_rows = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stock_technicals");
