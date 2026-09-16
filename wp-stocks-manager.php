@@ -1961,6 +1961,166 @@ function wp_stocks_fetch_quarterly_financials($stock_id, $symbol) {
 }
 
 // --------------------------------------------------
+// SEC EDGAR 四半期財務データ取得（yfinance代替の検証用実装）
+// --------------------------------------------------
+function wp_stocks_sec_user_agent() {
+    return 'WP Stocks Manager (otl@sf.commufa.jp)';
+}
+
+function wp_stocks_sec_get_cik_for_symbol($symbol) {
+    $map = get_transient('wp_stocks_sec_ticker_map');
+    if ($map === false) {
+        $response = wp_remote_get('https://www.sec.gov/files/company_tickers.json', array(
+            'headers' => array('User-Agent' => wp_stocks_sec_user_agent()),
+            'timeout' => 30,
+        ));
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            wp_stocks_log('error', 'sec_ticker_map', $symbol, 'ticker->CIKマッピングの取得に失敗しました: ' . (is_wp_error($response) ? $response->get_error_message() : wp_remote_retrieve_response_code($response)));
+            return false;
+        }
+        $raw = json_decode(wp_remote_retrieve_body($response), true);
+        if (!is_array($raw)) {
+            wp_stocks_log('error', 'sec_ticker_map', $symbol, 'ticker->CIKマッピングのJSON解釈に失敗しました');
+            return false;
+        }
+        $map = array();
+        foreach ($raw as $row) {
+            if (!empty($row['ticker']) && isset($row['cik_str'])) {
+                $map[strtoupper($row['ticker'])] = intval($row['cik_str']);
+            }
+        }
+        set_transient('wp_stocks_sec_ticker_map', $map, 30 * DAY_IN_SECONDS);
+    }
+    return $map[strtoupper($symbol)] ?? false;
+}
+
+function wp_stocks_sec_get_companyfacts($cik) {
+    $transient_key = 'wp_stocks_sec_facts_' . intval($cik);
+    $facts = get_transient($transient_key);
+    if ($facts !== false) {
+        return $facts;
+    }
+    $url = sprintf('https://data.sec.gov/api/xbrl/companyfacts/CIK%010d.json', intval($cik));
+    $response = wp_remote_get($url, array(
+        'headers' => array('User-Agent' => wp_stocks_sec_user_agent()),
+        'timeout' => 30,
+    ));
+    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+        wp_stocks_log('error', 'sec_companyfacts', (string)$cik, 'companyfacts取得に失敗しました: ' . (is_wp_error($response) ? $response->get_error_message() : wp_remote_retrieve_response_code($response)));
+        return false;
+    }
+    $facts = json_decode(wp_remote_retrieve_body($response), true);
+    if (!is_array($facts)) {
+        wp_stocks_log('error', 'sec_companyfacts', (string)$cik, 'companyfactsのJSON解釈に失敗しました');
+        return false;
+    }
+    set_transient($transient_key, $facts, 12 * HOUR_IN_SECONDS);
+    return $facts;
+}
+
+// duration factが約1四半期(80〜100日)かどうかを判定。instant(貸借対照表項目等)は除外。
+function wp_stocks_sec_is_quarter_fact($fact) {
+    if (empty($fact['start']) || empty($fact['end'])) {
+        return false;
+    }
+    $frame = $fact['frame'] ?? '';
+    if ($frame && strpos($frame, 'CY') === 0 && strpos($frame, 'Q') !== false && substr($frame, -1) !== 'I') {
+        return true;
+    }
+    $start = strtotime($fact['start']);
+    $end   = strtotime($fact['end']);
+    if ($start === false || $end === false) {
+        return false;
+    }
+    $days = ($end - $start) / DAY_IN_SECONDS;
+    return $days >= 80 && $days <= 100;
+}
+
+// 候補タグを全部マージ（企業がタグを途中で切り替えていても対応できるように）。
+// 同じ期末日が複数タグ/複数filingにまたがる場合は filed が新しいものを採用。
+function wp_stocks_sec_extract_quarterly($facts, $tags) {
+    $us_gaap = $facts['facts']['us-gaap'] ?? array();
+    $merged  = array();
+    $tags_used = array();
+    foreach ($tags as $tag) {
+        if (!isset($us_gaap[$tag]['units']['USD'])) {
+            continue;
+        }
+        foreach ($us_gaap[$tag]['units']['USD'] as $item) {
+            if (!wp_stocks_sec_is_quarter_fact($item)) {
+                continue;
+            }
+            $key = $item['end'];
+            $filed_new = $item['filed'] ?? '';
+            $filed_old = $merged[$key]['filed'] ?? '';
+            if (!isset($merged[$key]) || $filed_new > $filed_old) {
+                $merged[$key] = $item;
+                $tags_used[$tag] = true;
+            }
+        }
+    }
+    return array('tags_used' => array_keys($tags_used), 'facts' => $merged);
+}
+
+function wp_stocks_fetch_quarterly_financials_edgar($stock_id, $symbol) {
+    static $revenue_tags = array(
+        'Revenues',
+        'RevenueFromContractWithCustomerExcludingAssessedTax',
+        'RevenueFromContractWithCustomerIncludingAssessedTax',
+        'SalesRevenueNet',
+        'SalesRevenueGoodsNet',
+        'SalesRevenueServicesNet',
+    );
+    static $net_income_tags = array(
+        'NetIncomeLoss',
+        'ProfitLoss',
+    );
+
+    global $wpdb;
+
+    $cik = wp_stocks_sec_get_cik_for_symbol($symbol);
+    if ($cik === false) {
+        wp_stocks_log('error', 'fetch_quarterly_edgar', $symbol, 'SEC EDGARのticker->CIKマッピングに見つかりませんでした');
+        return false;
+    }
+
+    $facts = wp_stocks_sec_get_companyfacts($cik);
+    if ($facts === false) {
+        return false;
+    }
+
+    $revenue    = wp_stocks_sec_extract_quarterly($facts, $revenue_tags);
+    $net_income = wp_stocks_sec_extract_quarterly($facts, $net_income_tags);
+
+    $period_ends = array_unique(array_merge(array_keys($revenue['facts']), array_keys($net_income['facts'])));
+    rsort($period_ends);
+
+    if (empty($period_ends)) {
+        wp_stocks_log('error', 'fetch_quarterly_edgar', $symbol, '四半期データが取得できませんでした（CIK=' . $cik . '）');
+        return false;
+    }
+
+    $saved = 0;
+    foreach ($period_ends as $period_end) {
+        $rev_val = $revenue['facts'][$period_end]['val'] ?? null;
+        $ni_val  = $net_income['facts'][$period_end]['val'] ?? null;
+        $existing = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND period_end = %s AND source = 'edgar'",
+            $stock_id, $period_end
+        ));
+        $data = array('stock_id' => $stock_id, 'period_end' => $period_end, 'revenue' => $rev_val, 'net_income' => $ni_val, 'source' => 'edgar');
+        if ($existing) {
+            $wpdb->update($wpdb->prefix . 'stock_quarterly_financials', $data, array('id' => $existing));
+        } else {
+            $wpdb->insert($wpdb->prefix . 'stock_quarterly_financials', $data);
+        }
+        $saved++;
+    }
+    wp_stocks_log('info', 'fetch_quarterly_edgar', $symbol, $saved . '四半期分のデータを保存しました（revenueタグ=' . implode(',', $revenue['tags_used']) . ' / net_incomeタグ=' . implode(',', $net_income['tags_used']) . '）');
+    return $saved > 0;
+}
+
+// --------------------------------------------------
 // EDINET半期報告書の診断取得（ZIP内ファイル一覧とCSV内容をログ出力）
 // --------------------------------------------------
 function wp_stocks_diagnose_half_year_report($stock_id, $code) {
@@ -4589,6 +4749,58 @@ add_action('admin_post_fetch_quarterly_financials', function() {
     wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $stock_id . '&ctab=finance&ftab=quarterly&message=' . ($result ? 'fin_saved' : 'fin_error')));
     exit;
 });
+add_action('admin_post_wp_stocks_edgar_test_fetch', function() {
+    wp_stocks_require_admin_action('wp_stocks_edgar_test');
+    $symbol   = sanitize_text_field($_GET['symbol'] ?? 'AAPL');
+    $stock_id = intval($_GET['stock_id'] ?? 0);
+
+    header('Content-Type: text/plain; charset=utf-8');
+
+    $cik = wp_stocks_sec_get_cik_for_symbol($symbol);
+    if ($cik === false) {
+        echo "CIKが見つかりませんでした: {$symbol}\n";
+        exit;
+    }
+    echo "Symbol: {$symbol}\nCIK: {$cik}\n\n";
+
+    $facts = wp_stocks_sec_get_companyfacts($cik);
+    if ($facts === false) {
+        echo "companyfactsの取得に失敗しました（詳細はログを確認してください）\n";
+        exit;
+    }
+
+    if ($stock_id > 0) {
+        $result = wp_stocks_fetch_quarterly_financials_edgar($stock_id, $symbol);
+        echo "DB保存結果: " . ($result ? '成功' : '失敗') . " (stock_id={$stock_id}, source=edgar)\n\n";
+    } else {
+        echo "(stock_id未指定のためDB保存はスキップ。保存するにはURLに &stock_id=XX を追加してください)\n\n";
+    }
+
+    static $revenue_tags = array(
+        'Revenues', 'RevenueFromContractWithCustomerExcludingAssessedTax',
+        'RevenueFromContractWithCustomerIncludingAssessedTax', 'SalesRevenueNet',
+        'SalesRevenueGoodsNet', 'SalesRevenueServicesNet',
+    );
+    static $net_income_tags = array('NetIncomeLoss', 'ProfitLoss');
+
+    $revenue    = wp_stocks_sec_extract_quarterly($facts, $revenue_tags);
+    $net_income = wp_stocks_sec_extract_quarterly($facts, $net_income_tags);
+
+    echo "採用タグ: revenue=" . implode(',', $revenue['tags_used']) . " / net_income=" . implode(',', $net_income['tags_used']) . "\n\n";
+
+    $period_ends = array_unique(array_merge(array_keys($revenue['facts']), array_keys($net_income['facts'])));
+    rsort($period_ends);
+    $period_ends = array_slice($period_ends, 0, 8);
+
+    printf("%-12s %18s %18s\n", '期末日', 'revenue', 'net_income');
+    foreach ($period_ends as $end) {
+        $rev = $revenue['facts'][$end]['val'] ?? null;
+        $ni  = $net_income['facts'][$end]['val'] ?? null;
+        printf("%-12s %18s %18s\n", $end, $rev !== null ? number_format($rev) : '-', $ni !== null ? number_format($ni) : '-');
+    }
+    exit;
+});
+
 add_action('admin_post_diagnose_half_year', function() {
     $stock_id = intval($_GET['stock_id'] ?? 0);
     wp_stocks_require_admin_action('wp_stocks_diag_half_' . $stock_id);
