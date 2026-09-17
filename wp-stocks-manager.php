@@ -2145,8 +2145,12 @@ function wp_stocks_sec_derive_q4(&$quarterly, $annual_facts) {
             }
             $prev_end_ts = strtotime($q['end']);
         }
-        if ($contiguous && abs($prev_end_ts - $annual_end_ts) > $tolerance) {
-            $contiguous = false;
+        // Q3の終わりから年度末までの残り日数が、ちょうど1四半期分(80〜100日=Q4の期間)離れているはず
+        if ($contiguous) {
+            $remaining_days = ($annual_end_ts - $prev_end_ts) / DAY_IN_SECONDS;
+            if ($remaining_days < 80 || $remaining_days > 100) {
+                $contiguous = false;
+            }
         }
         if (!$contiguous) {
             continue;
