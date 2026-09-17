@@ -2174,45 +2174,14 @@ function wp_stocks_sec_derive_q4(&$quarterly, $annual_facts) {
     return $derived;
 }
 
-function wp_stocks_fetch_quarterly_financials_edgar($stock_id, $symbol) {
-    static $revenue_tags = array(
-        'Revenues',
-        'RevenueFromContractWithCustomerExcludingAssessedTax',
-        'RevenueFromContractWithCustomerIncludingAssessedTax',
-        'SalesRevenueNet',
-        'SalesRevenueGoodsNet',
-        'SalesRevenueServicesNet',
-    );
-    static $net_income_tags = array(
-        'NetIncomeLoss',
-        'ProfitLoss',
-    );
-
+function wp_stocks_sec_save_quarterly_facts($stock_id, $symbol, $revenue, $net_income) {
     global $wpdb;
-
-    $cik = wp_stocks_sec_get_cik_for_symbol($symbol);
-    if ($cik === false) {
-        wp_stocks_log('error', 'fetch_quarterly_edgar', $symbol, 'SEC EDGARのticker->CIKマッピングに見つかりませんでした');
-        return false;
-    }
-
-    $facts = wp_stocks_sec_get_companyfacts($cik);
-    if ($facts === false) {
-        return false;
-    }
-
-    $revenue    = wp_stocks_sec_extract_quarterly($facts, $revenue_tags);
-    $net_income = wp_stocks_sec_extract_quarterly($facts, $net_income_tags);
-
-    // Q4単独値を年次(10-K)から逆算して補完（年次-（Q1+Q2+Q3）。3四半期が揃わない年はスキップ）
-    wp_stocks_sec_derive_q4($revenue['facts'], wp_stocks_sec_extract_annual($facts, $revenue_tags));
-    wp_stocks_sec_derive_q4($net_income['facts'], wp_stocks_sec_extract_annual($facts, $net_income_tags));
 
     $period_ends = array_unique(array_merge(array_keys($revenue['facts']), array_keys($net_income['facts'])));
     rsort($period_ends);
 
     if (empty($period_ends)) {
-        wp_stocks_log('error', 'fetch_quarterly_edgar', $symbol, '四半期データが取得できませんでした（CIK=' . $cik . '）');
+        wp_stocks_log('error', 'fetch_quarterly_edgar', $symbol, '四半期データが取得できませんでした');
         return false;
     }
 
@@ -2234,6 +2203,42 @@ function wp_stocks_fetch_quarterly_financials_edgar($stock_id, $symbol) {
     }
     wp_stocks_log('info', 'fetch_quarterly_edgar', $symbol, $saved . '四半期分のデータを保存しました（revenueタグ=' . implode(',', $revenue['tags_used']) . ' / net_incomeタグ=' . implode(',', $net_income['tags_used']) . '）');
     return $saved > 0;
+}
+
+function wp_stocks_fetch_quarterly_financials_edgar($stock_id, $symbol) {
+    static $revenue_tags = array(
+        'Revenues',
+        'RevenueFromContractWithCustomerExcludingAssessedTax',
+        'RevenueFromContractWithCustomerIncludingAssessedTax',
+        'SalesRevenueNet',
+        'SalesRevenueGoodsNet',
+        'SalesRevenueServicesNet',
+    );
+    static $net_income_tags = array(
+        'NetIncomeLoss',
+        'ProfitLoss',
+    );
+
+    $cik = wp_stocks_sec_get_cik_for_symbol($symbol);
+    if ($cik === false) {
+        wp_stocks_log('error', 'fetch_quarterly_edgar', $symbol, 'SEC EDGARのticker->CIKマッピングに見つかりませんでした');
+        return false;
+    }
+
+    $facts = wp_stocks_sec_get_companyfacts($cik);
+    if ($facts === false) {
+        return false;
+    }
+
+    $revenue    = wp_stocks_sec_extract_quarterly($facts, $revenue_tags);
+    $net_income = wp_stocks_sec_extract_quarterly($facts, $net_income_tags);
+
+    // Q4単独値を年次(10-K)から逆算して補完（年次-（Q1+Q2+Q3）。3四半期が揃わない年はスキップ）
+    wp_stocks_sec_derive_q4($revenue['facts'], wp_stocks_sec_extract_annual($facts, $revenue_tags));
+    wp_stocks_sec_derive_q4($net_income['facts'], wp_stocks_sec_extract_annual($facts, $net_income_tags));
+    unset($facts); // companyfactsの生JSONは以降不要なのでここで解放（大企業ではサイズが大きくメモリを圧迫するため）
+
+    return wp_stocks_sec_save_quarterly_facts($stock_id, $symbol, $revenue, $net_income);
 }
 
 // --------------------------------------------------
@@ -4885,8 +4890,25 @@ add_action('admin_post_wp_stocks_edgar_test_fetch', function() {
         exit;
     }
 
+    static $revenue_tags = array(
+        'Revenues', 'RevenueFromContractWithCustomerExcludingAssessedTax',
+        'RevenueFromContractWithCustomerIncludingAssessedTax', 'SalesRevenueNet',
+        'SalesRevenueGoodsNet', 'SalesRevenueServicesNet',
+    );
+    static $net_income_tags = array('NetIncomeLoss', 'ProfitLoss');
+
+    $revenue    = wp_stocks_sec_extract_quarterly($facts, $revenue_tags);
+    $net_income = wp_stocks_sec_extract_quarterly($facts, $net_income_tags);
+
+    $q4_rev_count = wp_stocks_sec_derive_q4($revenue['facts'], wp_stocks_sec_extract_annual($facts, $revenue_tags));
+    $q4_ni_count  = wp_stocks_sec_derive_q4($net_income['facts'], wp_stocks_sec_extract_annual($facts, $net_income_tags));
+
+    // companyfactsの生JSONはここで解放（KOのような報告履歴が長い企業はサイズが大きく、
+    // 保持したままDB保存処理に入るとメモリを圧迫して致命的エラーの原因になるため）
+    unset($facts);
+
     if ($stock_id > 0) {
-        $result = wp_stocks_fetch_quarterly_financials_edgar($stock_id, $symbol);
+        $result = wp_stocks_sec_save_quarterly_facts($stock_id, $symbol, $revenue, $net_income);
         echo "DB保存結果: " . ($result ? '成功' : '失敗') . " (stock_id={$stock_id}, source=edgar)\n\n";
 
         // 実際にDBへ保存された内容を読み戻して表示（書き込みそのものの実証確認）
@@ -4909,19 +4931,6 @@ add_action('admin_post_wp_stocks_edgar_test_fetch', function() {
     } else {
         echo "(stock_id未指定のためDB保存はスキップ。保存するにはURLに &stock_id=XX を追加してください)\n\n";
     }
-
-    static $revenue_tags = array(
-        'Revenues', 'RevenueFromContractWithCustomerExcludingAssessedTax',
-        'RevenueFromContractWithCustomerIncludingAssessedTax', 'SalesRevenueNet',
-        'SalesRevenueGoodsNet', 'SalesRevenueServicesNet',
-    );
-    static $net_income_tags = array('NetIncomeLoss', 'ProfitLoss');
-
-    $revenue    = wp_stocks_sec_extract_quarterly($facts, $revenue_tags);
-    $net_income = wp_stocks_sec_extract_quarterly($facts, $net_income_tags);
-
-    $q4_rev_count = wp_stocks_sec_derive_q4($revenue['facts'], wp_stocks_sec_extract_annual($facts, $revenue_tags));
-    $q4_ni_count  = wp_stocks_sec_derive_q4($net_income['facts'], wp_stocks_sec_extract_annual($facts, $net_income_tags));
 
     echo "採用タグ: revenue=" . implode(',', $revenue['tags_used']) . " / net_income=" . implode(',', $net_income['tags_used']) . "\n";
     echo "Q4逆算件数: revenue={$q4_rev_count} / net_income={$q4_ni_count}\n\n";
