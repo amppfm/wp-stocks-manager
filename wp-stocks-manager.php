@@ -4888,6 +4888,24 @@ add_action('admin_post_wp_stocks_edgar_test_fetch', function() {
     if ($stock_id > 0) {
         $result = wp_stocks_fetch_quarterly_financials_edgar($stock_id, $symbol);
         echo "DB保存結果: " . ($result ? '成功' : '失敗') . " (stock_id={$stock_id}, source=edgar)\n\n";
+
+        // 実際にDBへ保存された内容を読み戻して表示（書き込みそのものの実証確認）
+        global $wpdb;
+        $saved_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT period_end, revenue, net_income, created_at FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source = 'edgar' ORDER BY period_end DESC",
+            $stock_id
+        ));
+        echo "DB実読み戻し（stock_quarterly_financials, source=edgar, stock_id={$stock_id}）: " . count($saved_rows) . "件\n";
+        printf("%-12s %18s %18s %s\n", '期末日', 'revenue', 'net_income', '保存日時');
+        foreach ($saved_rows as $row) {
+            printf("%-12s %17s  %17s  %s\n",
+                $row->period_end,
+                $row->revenue !== null ? number_format($row->revenue) : '-',
+                $row->net_income !== null ? number_format($row->net_income) : '-',
+                $row->created_at ?? ''
+            );
+        }
+        echo "\n";
     } else {
         echo "(stock_id未指定のためDB保存はスキップ。保存するにはURLに &stock_id=XX を追加してください)\n\n";
     }
@@ -10247,10 +10265,28 @@ function wp_stocks_settings_page() {
     $edgar_test_aapl_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_edgar_test_fetch&symbol=AAPL'), 'wp_stocks_edgar_test');
     $edgar_test_ko_url   = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_edgar_test_fetch&symbol=KO'), 'wp_stocks_edgar_test');
     echo '<tr><th>SEC EDGAR 動作確認</th><td>';
-    echo '<a href="' . esc_url($edgar_test_aapl_url) . '" class="button" target="_blank">AAPLで取得テスト（DB保存なし）</a> ';
-    echo '<a href="' . esc_url($edgar_test_ko_url) . '" class="button" target="_blank">KOで取得テスト（DB保存なし）</a>';
-    echo '<p class="description">SEC EDGARから四半期revenue/net_incomeを取得し、プレーンテキストで表示します（yfinance代替の検証用、DBには保存しません）。</p>';
+    echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">';
+    echo '<input type="number" id="wp_stocks_edgar_test_stock_id" style="width:100px;" placeholder="stock_id（任意）">';
+    echo '<span class="description" style="margin:0;">入力するとDB保存も実行し、実際に保存された内容を読み戻して表示します（未入力ならDB保存なし）</span>';
+    echo '</div>';
+    echo '<a href="' . esc_url($edgar_test_aapl_url) . '" class="button" id="wp_stocks_edgar_test_aapl" target="_blank">AAPLで取得テスト</a> ';
+    echo '<a href="' . esc_url($edgar_test_ko_url) . '" class="button" id="wp_stocks_edgar_test_ko" target="_blank">KOで取得テスト</a>';
+    echo '<p class="description">SEC EDGARから四半期revenue/net_incomeを取得し、プレーンテキストで表示します（yfinance代替の検証用）。</p>';
     echo '</td></tr>';
+    echo '<script>
+    (function(){
+        function wpStocksEdgarBindLink(linkId, baseUrl) {
+            var link = document.getElementById(linkId);
+            if (!link) return;
+            link.addEventListener("click", function() {
+                var sid = document.getElementById("wp_stocks_edgar_test_stock_id").value;
+                this.href = sid ? (baseUrl + "&stock_id=" + encodeURIComponent(sid)) : baseUrl;
+            });
+        }
+        wpStocksEdgarBindLink("wp_stocks_edgar_test_aapl", ' . wp_json_encode(html_entity_decode($edgar_test_aapl_url)) . ');
+        wpStocksEdgarBindLink("wp_stocks_edgar_test_ko", ' . wp_json_encode(html_entity_decode($edgar_test_ko_url)) . ');
+    })();
+    </script>';
 
     // 為替レート
     $usd_jpy_manual = get_option('wp_stocks_usd_jpy_manual', 0);
