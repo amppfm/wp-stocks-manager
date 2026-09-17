@@ -2062,6 +2062,114 @@ function wp_stocks_sec_extract_quarterly($facts, $tags) {
     return array('tags_used' => array_keys($tags_used), 'facts' => $merged);
 }
 
+// 年次fact(10-K相当、duration 350〜380日。52/53週決算などのブレを許容)を判定
+function wp_stocks_sec_is_annual_fact($fact) {
+    if (empty($fact['start']) || empty($fact['end'])) {
+        return false;
+    }
+    $start = strtotime($fact['start']);
+    $end   = strtotime($fact['end']);
+    if ($start === false || $end === false) {
+        return false;
+    }
+    $days = ($end - $start) / DAY_IN_SECONDS;
+    return $days >= 350 && $days <= 380;
+}
+
+// 候補タグ全部をマージして年次factを抽出（四半期版と同じマージロジック、判定条件だけ異なる）
+function wp_stocks_sec_extract_annual($facts, $tags) {
+    $us_gaap = $facts['facts']['us-gaap'] ?? array();
+    $merged  = array();
+    foreach ($tags as $tag) {
+        if (!isset($us_gaap[$tag]['units']['USD'])) {
+            continue;
+        }
+        foreach ($us_gaap[$tag]['units']['USD'] as $item) {
+            if (!wp_stocks_sec_is_annual_fact($item)) {
+                continue;
+            }
+            $key = $item['end'];
+            $filed_new = $item['filed'] ?? '';
+            $filed_old = $merged[$key]['filed'] ?? '';
+            if (!isset($merged[$key]) || $filed_new > $filed_old) {
+                $merged[$key] = $item;
+            }
+        }
+    }
+    return $merged;
+}
+
+// 年次fact − (Q1+Q2+Q3) でQ4単独値を逆算し、$quarterly（期末日=>fact の配列）に追加する。
+// 銘柄ごとの決算期を個別に知る必要はなく、各factが持つ実際のstart/end日付だけで判定する。
+// 3四半期がきれいに揃って年次期間を過不足なく埋める年だけ採用し、それ以外の年はQ4を諦める。
+function wp_stocks_sec_derive_q4(&$quarterly, $annual_facts) {
+    $derived = 0;
+    foreach ($annual_facts as $annual_end => $annual_item) {
+        // 既にその期末日のfactがある(=会社が単独Q4値を直接タグ付けしているケース)場合は上書きしない
+        if (isset($quarterly[$annual_end])) {
+            continue;
+        }
+        $annual_start_ts = strtotime($annual_item['start']);
+        $annual_end_ts   = strtotime($annual_item['end']);
+        if ($annual_start_ts === false || $annual_end_ts === false) {
+            continue;
+        }
+
+        // 年次期間にすっぽり収まる四半期を集める
+        $within = array();
+        foreach ($quarterly as $q_item) {
+            $q_start_ts = strtotime($q_item['start']);
+            $q_end_ts   = strtotime($q_item['end']);
+            if ($q_start_ts === false || $q_end_ts === false) {
+                continue;
+            }
+            if ($q_start_ts >= $annual_start_ts && $q_end_ts <= $annual_end_ts) {
+                $within[] = $q_item;
+            }
+        }
+        if (count($within) !== 3) {
+            continue; // 3四半期揃わない年はQ4を諦める（無理に出さない）
+        }
+
+        // start日付順に並べ、年次開始日〜終了日まで途切れなく繋がっているか確認（3日までの誤差は許容）
+        usort($within, function ($a, $b) {
+            return strtotime($a['start']) <=> strtotime($b['start']);
+        });
+        $tolerance   = 3 * DAY_IN_SECONDS;
+        $prev_end_ts = $annual_start_ts;
+        $contiguous  = true;
+        foreach ($within as $q) {
+            if (abs(strtotime($q['start']) - $prev_end_ts) > $tolerance) {
+                $contiguous = false;
+                break;
+            }
+            $prev_end_ts = strtotime($q['end']);
+        }
+        if ($contiguous && abs($prev_end_ts - $annual_end_ts) > $tolerance) {
+            $contiguous = false;
+        }
+        if (!$contiguous) {
+            continue;
+        }
+
+        $sum_q123 = 0;
+        foreach ($within as $q) {
+            $sum_q123 += $q['val'];
+        }
+
+        $quarterly[$annual_end] = array(
+            'start'   => $within[2]['end'],
+            'end'     => $annual_item['end'],
+            'val'     => $annual_item['val'] - $sum_q123,
+            'filed'   => $annual_item['filed'] ?? '',
+            'form'    => $annual_item['form'] ?? '10-K',
+            'derived' => true,
+        );
+        $derived++;
+    }
+    return $derived;
+}
+
 function wp_stocks_fetch_quarterly_financials_edgar($stock_id, $symbol) {
     static $revenue_tags = array(
         'Revenues',
@@ -2091,6 +2199,10 @@ function wp_stocks_fetch_quarterly_financials_edgar($stock_id, $symbol) {
 
     $revenue    = wp_stocks_sec_extract_quarterly($facts, $revenue_tags);
     $net_income = wp_stocks_sec_extract_quarterly($facts, $net_income_tags);
+
+    // Q4単独値を年次(10-K)から逆算して補完（年次-（Q1+Q2+Q3）。3四半期が揃わない年はスキップ）
+    wp_stocks_sec_derive_q4($revenue['facts'], wp_stocks_sec_extract_annual($facts, $revenue_tags));
+    wp_stocks_sec_derive_q4($net_income['facts'], wp_stocks_sec_extract_annual($facts, $net_income_tags));
 
     $period_ends = array_unique(array_merge(array_keys($revenue['facts']), array_keys($net_income['facts'])));
     rsort($period_ends);
@@ -4786,7 +4898,11 @@ add_action('admin_post_wp_stocks_edgar_test_fetch', function() {
     $revenue    = wp_stocks_sec_extract_quarterly($facts, $revenue_tags);
     $net_income = wp_stocks_sec_extract_quarterly($facts, $net_income_tags);
 
-    echo "採用タグ: revenue=" . implode(',', $revenue['tags_used']) . " / net_income=" . implode(',', $net_income['tags_used']) . "\n\n";
+    $q4_rev_count = wp_stocks_sec_derive_q4($revenue['facts'], wp_stocks_sec_extract_annual($facts, $revenue_tags));
+    $q4_ni_count  = wp_stocks_sec_derive_q4($net_income['facts'], wp_stocks_sec_extract_annual($facts, $net_income_tags));
+
+    echo "採用タグ: revenue=" . implode(',', $revenue['tags_used']) . " / net_income=" . implode(',', $net_income['tags_used']) . "\n";
+    echo "Q4逆算件数: revenue={$q4_rev_count} / net_income={$q4_ni_count}\n\n";
 
     $period_ends = array_unique(array_merge(array_keys($revenue['facts']), array_keys($net_income['facts'])));
     rsort($period_ends);
@@ -4796,8 +4912,11 @@ add_action('admin_post_wp_stocks_edgar_test_fetch', function() {
     foreach ($period_ends as $end) {
         $rev = $revenue['facts'][$end]['val'] ?? null;
         $ni  = $net_income['facts'][$end]['val'] ?? null;
-        printf("%-12s %18s %18s\n", $end, $rev !== null ? number_format($rev) : '-', $ni !== null ? number_format($ni) : '-');
+        $rev_mark = !empty($revenue['facts'][$end]['derived']) ? '*' : ' ';
+        $ni_mark  = !empty($net_income['facts'][$end]['derived']) ? '*' : ' ';
+        printf("%-12s %17s%s %17s%s\n", $end, $rev !== null ? number_format($rev) : '-', $rev_mark, $ni !== null ? number_format($ni) : '-', $ni_mark);
     }
+    echo "\n(* は年次-（Q1+Q2+Q3）による逆算値)\n";
     exit;
 });
 
