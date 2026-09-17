@@ -4902,21 +4902,7 @@ add_action('admin_post_wp_stocks_edgar_test_fetch', function() {
     $revenue    = wp_stocks_sec_extract_quarterly($facts, $revenue_tags);
     $net_income = wp_stocks_sec_extract_quarterly($facts, $net_income_tags);
 
-    $revenue_annual = wp_stocks_sec_extract_annual($facts, $revenue_tags);
-    echo "[診断] revenue annual件数: " . count($revenue_annual) . "\n";
-    foreach ($revenue_annual as $a_end => $a_item) {
-        $within = array();
-        foreach ($revenue['facts'] as $q_item) {
-            $qs = strtotime($q_item['start']); $qe = strtotime($q_item['end']);
-            if ($qs !== false && $qe !== false && $qs >= strtotime($a_item['start']) && $qe <= strtotime($a_item['end'])) {
-                $within[] = $q_item['start'] . '~' . $q_item['end'];
-            }
-        }
-        echo "[診断]  annual {$a_item['start']}~{$a_end} (val=" . number_format($a_item['val']) . "): 範囲内四半期=" . count($within) . " [" . implode(', ', $within) . "]\n";
-    }
-    echo "\n";
-
-    $q4_rev_count = wp_stocks_sec_derive_q4($revenue['facts'], $revenue_annual);
+    $q4_rev_count = wp_stocks_sec_derive_q4($revenue['facts'], wp_stocks_sec_extract_annual($facts, $revenue_tags));
     $q4_ni_count  = wp_stocks_sec_derive_q4($net_income['facts'], wp_stocks_sec_extract_annual($facts, $net_income_tags));
 
     echo "採用タグ: revenue=" . implode(',', $revenue['tags_used']) . " / net_income=" . implode(',', $net_income['tags_used']) . "\n";
