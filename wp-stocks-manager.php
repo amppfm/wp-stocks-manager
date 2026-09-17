@@ -10120,6 +10120,15 @@ function wp_stocks_settings_page() {
         echo '</td></tr>';
     }
 
+    // SEC EDGAR 動作確認リンク（yfinance代替の検証用）
+    $edgar_test_aapl_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_edgar_test_fetch&symbol=AAPL'), 'wp_stocks_edgar_test');
+    $edgar_test_ko_url   = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_edgar_test_fetch&symbol=KO'), 'wp_stocks_edgar_test');
+    echo '<tr><th>SEC EDGAR 動作確認</th><td>';
+    echo '<a href="' . esc_url($edgar_test_aapl_url) . '" class="button" target="_blank">AAPLで取得テスト（DB保存なし）</a> ';
+    echo '<a href="' . esc_url($edgar_test_ko_url) . '" class="button" target="_blank">KOで取得テスト（DB保存なし）</a>';
+    echo '<p class="description">SEC EDGARから四半期revenue/net_incomeを取得し、プレーンテキストで表示します（yfinance代替の検証用、DBには保存しません）。</p>';
+    echo '</td></tr>';
+
     // 為替レート
     $usd_jpy_manual = get_option('wp_stocks_usd_jpy_manual', 0);
     $usd_jpy_current = wp_stocks_get_usd_jpy();
