@@ -16,7 +16,7 @@ if (!get_option('wp_stocks_temp_opcache_reset_done')) {
     update_option('wp_stocks_temp_opcache_reset_done', 1);
 }
 
-define('WP_STOCKS_VERSION', '4.8');
+define('WP_STOCKS_VERSION', '4.9');
 define('WP_STOCKS_LOG_DAYS', 30);
 
 // --------------------------------------------------
