@@ -2037,10 +2037,16 @@ function wp_stocks_sec_is_quarter_fact($fact) {
 }
 
 // 候補タグを全部マージ（企業がタグを途中で切り替えていても対応できるように）。
-// 同じ期末日が複数タグ/複数filingにまたがる場合は filed が新しいものを採用。
+// 値(val)は filed が新しいものを採用（修正後の数値を反映するため）。
+// 一方でfy/fp（会計年度・四半期ラベル）は、fy/fpが実際に入っている記録の中で
+// 一番古い提出＝最初にその四半期として提出された記録を採用する。
+// SECのデータには同じ期間のfactが後の書類（登録届出書等）に比較値として再掲載され、
+// その際 fy/fp が null になっているケースが実在するため、null のレコードをラベル
+// 採用の候補から除外し、値の採用元とラベルの採用元を分離して扱う。
 function wp_stocks_sec_extract_quarterly($facts, $tags) {
     $us_gaap = $facts['facts']['us-gaap'] ?? array();
-    $merged  = array();
+    $merged       = array(); // period_end => 採用中のfact（valはfiledが最新のもの）
+    $label_source = array(); // period_end => fy/fp採用元 ['fy', 'fp', 'filed']（filedが最古のもの）
     $tags_used = array();
     foreach ($tags as $tag) {
         if (!isset($us_gaap[$tag]['units']['USD'])) {
@@ -2057,10 +2063,23 @@ function wp_stocks_sec_extract_quarterly($facts, $tags) {
                 $merged[$key] = $item;
                 $tags_used[$tag] = true;
             }
+
+            if ($item['fy'] !== null && !empty($item['fp'])) {
+                $existing_label = $label_source[$key] ?? null;
+                if ($existing_label === null || $filed_new < $existing_label['filed']) {
+                    $label_source[$key] = array('fy' => $item['fy'], 'fp' => $item['fp'], 'filed' => $filed_new);
+                }
+            }
         }
     }
+    foreach ($merged as $key => &$item) {
+        $item['fy'] = $label_source[$key]['fy'] ?? null;
+        $item['fp'] = $label_source[$key]['fp'] ?? null;
+    }
+    unset($item);
     return array('tags_used' => array_keys($tags_used), 'facts' => $merged);
 }
+
 
 // 年次fact(10-K相当、duration 350〜380日。52/53週決算などのブレを許容)を判定
 function wp_stocks_sec_is_annual_fact($fact) {
@@ -2076,10 +2095,14 @@ function wp_stocks_sec_is_annual_fact($fact) {
     return $days >= 350 && $days <= 380;
 }
 
-// 候補タグ全部をマージして年次factを抽出（四半期版と同じマージロジック、判定条件だけ異なる）
+// 候補タグ全部をマージして年次factを抽出（四半期版と同じマージロジック、判定条件だけ異なる）。
+// 値(val)はfiledが最新のものを採用しつつ、fy/fp（年度ラベル）はfy/fpが実際に入っている
+// 記録の中で一番古い提出を採用する（四半期版と同じ理由：翌年の10-Kに比較値として
+// 再掲載された際、そちらのfyに誤ってズレる事例があるため）。
 function wp_stocks_sec_extract_annual($facts, $tags) {
     $us_gaap = $facts['facts']['us-gaap'] ?? array();
-    $merged  = array();
+    $merged       = array();
+    $label_source = array();
     foreach ($tags as $tag) {
         if (!isset($us_gaap[$tag]['units']['USD'])) {
             continue;
@@ -2094,20 +2117,32 @@ function wp_stocks_sec_extract_annual($facts, $tags) {
             if (!isset($merged[$key]) || $filed_new > $filed_old) {
                 $merged[$key] = $item;
             }
+
+            if ($item['fy'] !== null && !empty($item['fp'])) {
+                $existing_label = $label_source[$key] ?? null;
+                if ($existing_label === null || $filed_new < $existing_label['filed']) {
+                    $label_source[$key] = array('fy' => $item['fy'], 'fp' => $item['fp'], 'filed' => $filed_new);
+                }
+            }
         }
     }
+    foreach ($merged as $key => &$item) {
+        $item['fy'] = $label_source[$key]['fy'] ?? null;
+        $item['fp'] = $label_source[$key]['fp'] ?? null;
+    }
+    unset($item);
     return $merged;
 }
 
-// 年次fact − (Q1+Q2+Q3) でQ4単独値を逆算し、$quarterly（期末日=>fact の配列）に追加する。
-// 銘柄ごとの決算期を個別に知る必要はなく、各factが持つ実際のstart/end日付だけで判定する。
-// 3四半期がきれいに揃って年次期間を過不足なく埋める年だけ採用し、それ以外の年はQ4を諦める。
 // SEC EDGARの fp ("Q1"〜"Q4") を四半期番号(1〜4)に変換。想定外の値はnull
 function wp_stocks_sec_fp_to_quarter_num($fp) {
     $map = array('Q1' => 1, 'Q2' => 2, 'Q3' => 3, 'Q4' => 4);
     return $map[$fp] ?? null;
 }
 
+// 年次fact − (Q1+Q2+Q3) でQ4単独値を逆算し、$quarterly（期末日=>fact の配列）に追加する。
+// 銘柄ごとの決算期を個別に知る必要はなく、各factが持つ実際のstart/end日付だけで判定する。
+// 3四半期がきれいに揃って年次期間を過不足なく埋める年だけ採用し、それ以外の年はQ4を諦める。
 function wp_stocks_sec_derive_q4(&$quarterly, $annual_facts) {
     $derived = 0;
     foreach ($annual_facts as $annual_end => $annual_item) {
@@ -8213,7 +8248,7 @@ function wp_stocks_company_page() {
 
                 function wpStocksUsQuarterlyChart(elId, prevData, curData) {
                     new ApexCharts(document.getElementById(elId), {
-                        chart: { height: 300, toolbar: { show: false } },
+                        chart: { type: 'bar', height: 300, toolbar: { show: false } },
                         series: [
                             { name: '前期', data: prevData },
                             { name: '当期', data: curData },
@@ -11790,16 +11825,24 @@ add_action('wp_stocks_company_cron', function() {
     global $wpdb;
     $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks ORDER BY id ASC");
     $ok = $ng = 0;
+    $edgar_ok = $edgar_ng = 0;
 
     foreach ($stocks as $s) {
-        $sym = ($s->currency ?? 'JPY') === 'USD' ? $s->code : $s->code . '.T';
+        $is_usd = ($s->currency ?? 'JPY') === 'USD';
+        $sym = $is_usd ? $s->code : $s->code . '.T';
         $result = wp_stocks_save_company_info($s->id, $sym);
         if ($result) $ok++; else $ng++;
+
+        // 米国株はついでにSEC EDGARの四半期財務データも週次で取得する
+        if ($is_usd) {
+            $edgar_result = wp_stocks_fetch_quarterly_financials_edgar($s->id, $s->code);
+            if ($edgar_result) $edgar_ok++; else $edgar_ng++;
+        }
 
         // 負荷対策：3件ごとに5秒sleep、それ以外は2秒
         if (($ok + $ng) % 3 === 0) sleep(5);
         else sleep(2);
     }
 
-    wp_stocks_log('info', 'company_cron', 'ALL', "企業情報週次更新完了：成功{$ok}件 / 失敗{$ng}件");
+    wp_stocks_log('info', 'company_cron', 'ALL', "企業情報週次更新完了：成功{$ok}件 / 失敗{$ng}件（うち米国株EDGAR財務：成功{$edgar_ok}件 / 失敗{$edgar_ng}件）");
 });
