@@ -16,7 +16,7 @@ if (!get_option('wp_stocks_temp_opcache_reset_done')) {
     update_option('wp_stocks_temp_opcache_reset_done', 1);
 }
 
-define('WP_STOCKS_VERSION', '4.7');
+define('WP_STOCKS_VERSION', '4.8');
 define('WP_STOCKS_LOG_DAYS', 30);
 
 // --------------------------------------------------
@@ -2102,6 +2102,12 @@ function wp_stocks_sec_extract_annual($facts, $tags) {
 // 年次fact − (Q1+Q2+Q3) でQ4単独値を逆算し、$quarterly（期末日=>fact の配列）に追加する。
 // 銘柄ごとの決算期を個別に知る必要はなく、各factが持つ実際のstart/end日付だけで判定する。
 // 3四半期がきれいに揃って年次期間を過不足なく埋める年だけ採用し、それ以外の年はQ4を諦める。
+// SEC EDGARの fp ("Q1"〜"Q4") を四半期番号(1〜4)に変換。想定外の値はnull
+function wp_stocks_sec_fp_to_quarter_num($fp) {
+    $map = array('Q1' => 1, 'Q2' => 2, 'Q3' => 3, 'Q4' => 4);
+    return $map[$fp] ?? null;
+}
+
 function wp_stocks_sec_derive_q4(&$quarterly, $annual_facts) {
     $derived = 0;
     foreach ($annual_facts as $annual_end => $annual_item) {
@@ -2167,6 +2173,8 @@ function wp_stocks_sec_derive_q4(&$quarterly, $annual_facts) {
             'val'     => $annual_item['val'] - $sum_q123,
             'filed'   => $annual_item['filed'] ?? '',
             'form'    => $annual_item['form'] ?? '10-K',
+            'fy'      => $annual_item['fy'] ?? (int) date('Y', $annual_end_ts),
+            'fp'      => 'Q4',
             'derived' => true,
         );
         $derived++;
@@ -2187,13 +2195,28 @@ function wp_stocks_sec_save_quarterly_facts($stock_id, $symbol, $revenue, $net_i
 
     $saved = 0;
     foreach ($period_ends as $period_end) {
-        $rev_val = $revenue['facts'][$period_end]['val'] ?? null;
-        $ni_val  = $net_income['facts'][$period_end]['val'] ?? null;
+        $rev_fact = $revenue['facts'][$period_end] ?? null;
+        $ni_fact  = $net_income['facts'][$period_end] ?? null;
+        $rev_val  = $rev_fact['val'] ?? null;
+        $ni_val   = $ni_fact['val'] ?? null;
+        // fy/fpはrevenue側を優先し、無ければnet_income側から補う（どちらも同じ期末日のfactなので通常一致する）
+        $fy = $rev_fact['fy'] ?? $ni_fact['fy'] ?? null;
+        $fp = $rev_fact['fp'] ?? $ni_fact['fp'] ?? null;
+        $fiscal_quarter = wp_stocks_sec_fp_to_quarter_num($fp);
+
         $existing = $wpdb->get_var($wpdb->prepare(
             "SELECT id FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND period_end = %s AND source = 'edgar'",
             $stock_id, $period_end
         ));
-        $data = array('stock_id' => $stock_id, 'period_end' => $period_end, 'revenue' => $rev_val, 'net_income' => $ni_val, 'source' => 'edgar');
+        $data = array(
+            'stock_id'       => $stock_id,
+            'period_end'     => $period_end,
+            'revenue'        => $rev_val,
+            'net_income'     => $ni_val,
+            'source'         => 'edgar',
+            'fiscal_year'    => $fy,
+            'fiscal_quarter' => $fiscal_quarter,
+        );
         if ($existing) {
             $wpdb->update($wpdb->prefix . 'stock_quarterly_financials', $data, array('id' => $existing));
         } else {
@@ -2203,6 +2226,21 @@ function wp_stocks_sec_save_quarterly_facts($stock_id, $symbol, $revenue, $net_i
     }
     wp_stocks_log('info', 'fetch_quarterly_edgar', $symbol, $saved . '四半期分のデータを保存しました（revenueタグ=' . implode(',', $revenue['tags_used']) . ' / net_incomeタグ=' . implode(',', $net_income['tags_used']) . '）');
     return $saved > 0;
+}
+
+// fiscal_quarter(1〜4)をキーにした四半期行の配列から、1Q/2Q累計/3Q累計/通期の累計値を計算する。
+// 途中で欠けている四半期がある時点以降はnullのままにする（未発表分のバーを出さないため）
+function wp_stocks_sec_cumulative_quarters($quarters_by_num, $field) {
+    $sum = 0;
+    $out = array(null, null, null, null);
+    for ($q = 1; $q <= 4; $q++) {
+        if (!isset($quarters_by_num[$q]) || $quarters_by_num[$q]->{$field} === null) {
+            break;
+        }
+        $sum += $quarters_by_num[$q]->{$field};
+        $out[$q - 1] = round($sum / 1000000);
+    }
+    return $out;
 }
 
 function wp_stocks_fetch_quarterly_financials_edgar($stock_id, $symbol) {
@@ -3643,6 +3681,8 @@ function wp_stocks_manager_create_tables() {
         revenue BIGINT DEFAULT NULL,
         net_income BIGINT DEFAULT NULL,
         source VARCHAR(20) NOT NULL DEFAULT 'yahoo',
+        fiscal_year SMALLINT DEFAULT NULL,
+        fiscal_quarter TINYINT DEFAULT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
         UNIQUE KEY stock_period_source (stock_id, period_end, source)
@@ -3665,6 +3705,17 @@ function wp_stocks_manager_create_tables() {
 
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4); dbDelta($sql5); dbDelta($sql6); dbDelta($sql_fin); dbDelta($sql7); dbDelta($sql8); dbDelta($sql9); dbDelta($sql10); dbDelta($sql_signal_history); dbDelta($sql_jpx_sector_per);
+
+    // dbDelta()は "CREATE TABLE IF NOT EXISTS" の書き方だとテーブル名の抽出に失敗し
+    // （正規表現が最初の1単語である"IF"をテーブル名と誤認識する既知の不具合）、
+    // 既存テーブルへのカラム追加が反映されないため、ここだけ明示的にALTER TABLEで追加する。
+    $wsm_qf_columns = $wpdb->get_col("DESC {$wpdb->prefix}stock_quarterly_financials", 0);
+    if (!in_array('fiscal_year', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN fiscal_year SMALLINT DEFAULT NULL AFTER source");
+    }
+    if (!in_array('fiscal_quarter', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN fiscal_quarter TINYINT DEFAULT NULL AFTER fiscal_year");
+    }
 
     // 既存テーブルへのカラム追加
     $columns = $wpdb->get_col("DESCRIBE {$wpdb->prefix}stocks", 0);
@@ -4867,6 +4918,16 @@ add_action('admin_post_fetch_quarterly_financials', function() {
     if (!$stock) wp_die('銘柄が見つかりません');
     $symbol = ($stock->currency ?? 'JPY') === 'USD' ? $stock->code : $stock->code . '.T';
     $result = wp_stocks_fetch_quarterly_financials($stock_id, $symbol);
+    wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $stock_id . '&ctab=finance&ftab=quarterly&message=' . ($result ? 'fin_saved' : 'fin_error')));
+    exit;
+});
+add_action('admin_post_fetch_quarterly_financials_edgar', function() {
+    $stock_id = intval($_GET['stock_id'] ?? 0);
+    wp_stocks_require_admin_action('wp_stocks_fetch_qfin_edgar_' . $stock_id);
+    global $wpdb;
+    $stock = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}stocks WHERE id = %d", $stock_id));
+    if (!$stock) wp_die('銘柄が見つかりません');
+    $result = wp_stocks_fetch_quarterly_financials_edgar($stock_id, $stock->code);
     wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $stock_id . '&ctab=finance&ftab=quarterly&message=' . ($result ? 'fin_saved' : 'fin_error')));
     exit;
 });
@@ -7793,7 +7854,7 @@ function wp_stocks_company_page() {
 
     echo '<h2 style="border-left:4px solid #0073aa;padding-left:10px;">年間</h2>';
 
-    {
+    if (!$is_usd) {
     $financials = $wpdb->get_results($wpdb->prepare(
         "SELECT * FROM {$wpdb->prefix}stock_financials WHERE stock_id = %d ORDER BY fiscal_year ASC", $id
     ));
@@ -7961,10 +8022,91 @@ function wp_stocks_company_page() {
         <?php
     }
 
+    } else {
+        // ===== 米国株: SEC EDGAR由来の年間業績 =====
+        $edgar_qf = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source = 'edgar' AND fiscal_year IS NOT NULL AND fiscal_quarter IS NOT NULL ORDER BY fiscal_year ASC, fiscal_quarter ASC", $id
+        ));
+        $edgar_fetch_url = wp_nonce_url(admin_url('admin-post.php?action=fetch_quarterly_financials_edgar&stock_id=' . $id), 'wp_stocks_fetch_qfin_edgar_' . $id);
+
+        if (empty($edgar_qf)) {
+            echo '<div style="background:#f8f9fa;border:1px solid #ddd;border-radius:8px;padding:30px;text-align:center;color:#888;margin-bottom:20px;">';
+            echo '<p style="font-size:16px;font-weight:bold;margin-bottom:10px;">&#x1F4B0; 財務データがまだ取得されていません</p>';
+            echo '<p style="font-size:13px;">下のボタンでSEC EDGARから取得してください。</p>';
+            echo '<p style="margin-top:15px;"><a href="' . esc_url($edgar_fetch_url) . '" class="button button-primary">&#x1F4CA; SEC EDGARから財務データを取得</a></p>';
+            echo '</div>';
+        } else {
+            $by_fy = array();
+            foreach ($edgar_qf as $row) {
+                $by_fy[$row->fiscal_year][$row->fiscal_quarter] = $row;
+            }
+            ksort($by_fy);
+
+            $annual_labels = array(); $annual_revenue = array(); $annual_net_income = array(); $annual_margin = array();
+            foreach ($by_fy as $fy => $quarters) {
+                if (count($quarters) < 4) continue; // 4四半期揃っている年度のみ年間集計に採用
+                $rev_sum = 0; $ni_sum = 0; $rev_ok = true; $ni_ok = true;
+                foreach ($quarters as $q) {
+                    if ($q->revenue === null) $rev_ok = false; else $rev_sum += $q->revenue;
+                    if ($q->net_income === null) $ni_ok = false; else $ni_sum += $q->net_income;
+                }
+                $annual_labels[]     = 'FY' . $fy;
+                $annual_revenue[]    = $rev_ok ? round($rev_sum / 1000000) : null;
+                $annual_net_income[] = $ni_ok ? round($ni_sum / 1000000) : null;
+                $annual_margin[]     = ($rev_ok && $ni_ok && $rev_sum != 0) ? round($ni_sum / $rev_sum * 100, 1) : null;
+            }
+
+            echo '<p style="text-align:right;margin-bottom:15px;"><a href="' . esc_url($edgar_fetch_url) . '" class="button">&#x1F504; SEC EDGARから財務データを再取得</a></p>';
+            ?>
+            <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+            <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;">
+                <h3 style="margin:0 0 15px 0;font-size:14px;">&#x1F4B9; 業績グラフ（百万ドル／純利益率%）</h3>
+                <div id="finChartUsAnnual"></div>
+            </div>
+            <div style="overflow-x:auto;margin-bottom:20px;">
+                <table class="widefat" style="font-size:13px;">
+                    <thead><tr><th>会計年度</th><th>売上高（百万ドル）</th><th>純利益（百万ドル）</th><th>純利益率</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($annual_labels as $i => $label): ?>
+                    <tr>
+                        <td><?php echo esc_html($label); ?></td>
+                        <td><?php echo $annual_revenue[$i] !== null ? number_format($annual_revenue[$i]) : '-'; ?></td>
+                        <td><?php echo $annual_net_income[$i] !== null ? number_format($annual_net_income[$i]) : '-'; ?></td>
+                        <td><?php echo $annual_margin[$i] !== null ? number_format($annual_margin[$i], 1) . '%' : '-'; ?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <script>
+            new ApexCharts(document.getElementById('finChartUsAnnual'), {
+                chart: { height: 360, toolbar: { show: false } },
+                series: [
+                    { name: '売上高',   type: 'column', data: <?php echo json_encode($annual_revenue); ?> },
+                    { name: '純利益',   type: 'column', data: <?php echo json_encode($annual_net_income); ?> },
+                    { name: '純利益率', type: 'line',   data: <?php echo json_encode($annual_margin); ?> },
+                ],
+                xaxis: { categories: <?php echo json_encode($annual_labels); ?> },
+                colors: ['#2ecc71', '#3498db', '#f39c12'],
+                stroke: { width: [0, 0, 3], curve: 'smooth' },
+                markers: { size: [0, 0, 4], colors: ['#f39c12'] },
+                dataLabels: { enabled: false },
+                legend: { position: 'top' },
+                plotOptions: { bar: { columnWidth: '55%' } },
+                yaxis: [
+                    { seriesName: '売上高', title: { text: '百万ドル', style: { fontSize: '11px' } }, labels: { formatter: function(v) { return v === null ? '' : v.toLocaleString(); } } },
+                    { seriesName: '純利益', show: false },
+                    { seriesName: '純利益率', opposite: true, min: -50, max: 50, title: { text: '純利益率(%)', style: { fontSize: '11px' } }, labels: { formatter: function(v) { return v === null ? '' : v + '%'; } } },
+                ],
+                tooltip: { y: { formatter: function(v, opts) { if (v === null || v === undefined) return '-'; return opts.seriesIndex === 2 ? v + '%' : Number(v).toLocaleString() + '百万ドル'; } } },
+            }).render();
+            </script>
+            <?php
+        }
     }
     echo '<h2 style="border-left:4px solid #0073aa;padding-left:10px;margin-top:30px;">四半期</h2>';
 
-    {
+    if (!$is_usd) {
         $qf = $wpdb->get_results($wpdb->prepare(
             "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source = 'yahoo' ORDER BY period_end DESC", $id
         ));
@@ -7979,6 +8121,117 @@ function wp_stocks_company_page() {
                 echo '<tr><td>' . esc_html($q->period_end) . '</td><td>' . ($q->revenue ? number_format($q->revenue / 1000000) : '-') . '</td><td>' . ($q->net_income ? number_format($q->net_income / 1000000) : '-') . '</td></tr>';
             }
             echo '</tbody></table>';
+        }
+    } else {
+        // ===== 米国株: SEC EDGAR由来の四半期（累計比較＋進捗率ゲージ） =====
+        $edgar_qf = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source = 'edgar' AND fiscal_year IS NOT NULL AND fiscal_quarter IS NOT NULL ORDER BY fiscal_year ASC, fiscal_quarter ASC", $id
+        ));
+        $edgar_fetch_url = wp_nonce_url(admin_url('admin-post.php?action=fetch_quarterly_financials_edgar&stock_id=' . $id), 'wp_stocks_fetch_qfin_edgar_' . $id);
+        echo '<p style="text-align:right;margin-bottom:15px;"><a href="' . esc_url($edgar_fetch_url) . '" class="button">&#x1F504; SEC EDGARから四半期データを取得</a></p>';
+
+        if (empty($edgar_qf)) {
+            echo '<p style="color:#888;">四半期データがまだ取得されていません。上のボタンから取得してください。</p>';
+        } else {
+            $by_fy = array();
+            foreach ($edgar_qf as $row) {
+                $by_fy[$row->fiscal_year][$row->fiscal_quarter] = $row;
+            }
+            krsort($by_fy);
+            $fys     = array_keys($by_fy);
+            $cur_fy  = $fys[0] ?? null;
+            $prev_fy = $fys[1] ?? null;
+
+            $cur_quarters  = $cur_fy  !== null ? $by_fy[$cur_fy]  : array();
+            $prev_quarters = $prev_fy !== null ? $by_fy[$prev_fy] : array();
+
+            $cur_revenue_cum  = wp_stocks_sec_cumulative_quarters($cur_quarters, 'revenue');
+            $cur_ni_cum       = wp_stocks_sec_cumulative_quarters($cur_quarters, 'net_income');
+            $prev_revenue_cum = wp_stocks_sec_cumulative_quarters($prev_quarters, 'revenue');
+            $prev_ni_cum      = wp_stocks_sec_cumulative_quarters($prev_quarters, 'net_income');
+
+            $categories = array('1Q', '2Q累計', '3Q累計', '通期');
+
+            // 進捗率ゲージ：当期の最新累計 ÷ 前期通期実績
+            $prev_revenue_full = $prev_revenue_cum[3];
+            $prev_ni_full      = $prev_ni_cum[3];
+            $cur_revenue_latest = null;
+            foreach (array_reverse($cur_revenue_cum) as $v) { if ($v !== null) { $cur_revenue_latest = $v; break; } }
+            $cur_ni_latest = null;
+            foreach (array_reverse($cur_ni_cum) as $v) { if ($v !== null) { $cur_ni_latest = $v; break; } }
+            $revenue_progress = (!empty($prev_revenue_full) && $cur_revenue_latest !== null) ? round($cur_revenue_latest / $prev_revenue_full * 100, 1) : null;
+            $ni_progress      = (!empty($prev_ni_full) && $cur_ni_latest !== null) ? round($cur_ni_latest / $prev_ni_full * 100, 1) : null;
+            ?>
+            <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+
+            <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:20px;">
+                <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;flex:1;min-width:200px;text-align:center;">
+                    <h3 style="margin:0 0 5px 0;font-size:14px;">売上高 進捗率</h3>
+                    <div id="gaugeUsRevenue"></div>
+                </div>
+                <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;flex:1;min-width:200px;text-align:center;">
+                    <h3 style="margin:0 0 5px 0;font-size:14px;">純利益 進捗率</h3>
+                    <div id="gaugeUsNetIncome"></div>
+                </div>
+            </div>
+
+            <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;">
+                <h3 style="margin:0 0 15px 0;font-size:14px;">&#x1F4B9; 売上高（前期比・百万ドル）</h3>
+                <div id="finChartUsQuarterlyRevenue"></div>
+            </div>
+            <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;">
+                <h3 style="margin:0 0 15px 0;font-size:14px;">&#x1F4B9; 純利益（前期比・百万ドル）</h3>
+                <div id="finChartUsQuarterlyNetIncome"></div>
+            </div>
+
+            <script>
+            (function() {
+                function wpStocksUsGauge(elId, value, label) {
+                    if (value === null) {
+                        document.getElementById(elId).innerHTML = '<p style="color:#888;padding:30px 0;">データ不足</p>';
+                        return;
+                    }
+                    new ApexCharts(document.getElementById(elId), {
+                        chart: { type: 'radialBar', height: 220 },
+                        series: [Math.max(0, Math.min(value, 150))],
+                        plotOptions: {
+                            radialBar: {
+                                startAngle: -90, endAngle: 90,
+                                hollow: { size: '60%' },
+                                dataLabels: {
+                                    name: { show: false },
+                                    value: { fontSize: '24px', formatter: function() { return value + '%'; }, offsetY: -10 },
+                                },
+                            },
+                        },
+                        fill: { colors: ['#0073aa'] },
+                        labels: [label],
+                    }).render();
+                }
+                wpStocksUsGauge('gaugeUsRevenue', <?php echo json_encode($revenue_progress); ?>, '売上高進捗率');
+                wpStocksUsGauge('gaugeUsNetIncome', <?php echo json_encode($ni_progress); ?>, '純利益進捗率');
+
+                function wpStocksUsQuarterlyChart(elId, prevData, curData) {
+                    new ApexCharts(document.getElementById(elId), {
+                        chart: { height: 300, toolbar: { show: false } },
+                        series: [
+                            { name: '前期', data: prevData },
+                            { name: '当期', data: curData },
+                        ],
+                        xaxis: { categories: <?php echo json_encode($categories); ?> },
+                        colors: ['#aed6f1', '#2980b9'],
+                        dataLabels: { enabled: false },
+                        legend: { position: 'top' },
+                        plotOptions: { bar: { columnWidth: '55%' } },
+                        yaxis: { labels: { formatter: function(v) { return v === null ? '' : v.toLocaleString(); } } },
+                        tooltip: { y: { formatter: function(v) { return v === null ? '-' : Number(v).toLocaleString() + '百万ドル'; } } },
+                    }).render();
+                }
+                wpStocksUsQuarterlyChart('finChartUsQuarterlyRevenue', <?php echo json_encode($prev_revenue_cum); ?>, <?php echo json_encode($cur_revenue_cum); ?>);
+                wpStocksUsQuarterlyChart('finChartUsQuarterlyNetIncome', <?php echo json_encode($prev_ni_cum); ?>, <?php echo json_encode($cur_ni_cum); ?>);
+            })();
+            </script>
+            <?php
         }
     }
 
