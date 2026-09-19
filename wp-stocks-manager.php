@@ -1189,6 +1189,96 @@ function wp_stocks_get_crumb() {
 // --------------------------------------------------
 // 企業情報取得
 // --------------------------------------------------
+// --------------------------------------------------
+// Financial Modeling Prep (FMP) API 連携
+// 米国株の財務スコアカード（PER/PBR/ROE/自己資本比率/配当利回り/PEG/利益率）を
+// Yahoo Financeベースの取得から置き換えるために追加（2026-09 実機検証済み・無料Basicプランで動作確認）
+// --------------------------------------------------
+function wp_stocks_fmp_api_key() {
+    return get_option('wp_stocks_fmp_api_key', '');
+}
+
+function wp_stocks_fmp_fetch($endpoint, $params = array()) {
+    $api_key = wp_stocks_fmp_api_key();
+    if (empty($api_key)) return false;
+
+    $params['apikey'] = $api_key;
+    $url = 'https://financialmodelingprep.com/stable/' . $endpoint . '?' . http_build_query($params);
+
+    $response = wp_remote_get($url, array('timeout' => 20));
+    if (is_wp_error($response)) {
+        wp_stocks_log('error', 'fmp_fetch', $endpoint, 'リクエスト失敗：' . $response->get_error_message());
+        return false;
+    }
+    $code = wp_remote_retrieve_response_code($response);
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+    if ($code !== 200) {
+        wp_stocks_log('error', 'fmp_fetch', $endpoint, 'HTTPエラー：' . $code . ' / ' . wp_remote_retrieve_body($response));
+        return false;
+    }
+    if (is_array($body) && isset($body['Error Message'])) {
+        wp_stocks_log('error', 'fmp_fetch', $endpoint, 'APIエラー：' . $body['Error Message']);
+        return false;
+    }
+    return $body;
+}
+
+// 米国株の財務スコアカード用比率をFMPから取得（ratios-ttm + key-metrics-ttm）
+// 失敗時（APIキー未設定・通信失敗・データ無し）はfalseを返す。
+// 呼び出し側はfalseの場合Yahoo由来の値をそのまま使うフォールバックとする。
+function wp_stocks_fmp_get_ratios($symbol) {
+    $ratios = wp_stocks_fmp_fetch('ratios-ttm', array('symbol' => $symbol));
+    if (!is_array($ratios) || empty($ratios[0])) return false;
+    $r = $ratios[0];
+
+    $metrics = wp_stocks_fmp_fetch('key-metrics-ttm', array('symbol' => $symbol));
+    $m = (is_array($metrics) && !empty($metrics[0])) ? $metrics[0] : array();
+
+    // 自己資本比率 = 1 / 財務レバレッジ比率（総資産÷純資産）× 100
+    $leverage     = floatval($m['financialLeverageRatioTTM'] ?? 0);
+    $equity_ratio = $leverage > 0 ? round(100 / $leverage, 1) : 0;
+
+    return array(
+        'per'            => floatval($r['priceToEarningsRatioTTM']              ?? 0),
+        'pbr'            => floatval($r['priceToBookRatioTTM']                  ?? 0),
+        'eps'            => floatval($r['netIncomePerShareTTM']                 ?? 0),
+        'profit_margin'  => floatval($r['netProfitMarginTTM']                   ?? 0) * 100,
+        'dividend_yield' => floatval($r['dividendYieldTTM']                     ?? 0) * 100,
+        'peg_trailing'   => floatval($r['priceToEarningsGrowthRatioTTM']        ?? 0),
+        'peg'            => floatval($r['forwardPriceToEarningsGrowthRatioTTM'] ?? 0),
+        'roe'            => floatval($m['returnOnEquityTTM']  ?? 0) * 100,
+        'roa'            => floatval($m['returnOnAssetsTTM']  ?? 0) * 100,
+        'market_cap'     => intval($m['marketCap'] ?? 0),
+        'equity_ratio'   => $equity_ratio,
+    );
+}
+
+// 保有米国株の「次回決算予定日」を一括取得してtransientにキャッシュ（12時間）。
+// FMPのearnings-calendarはsymbolでの絞り込みが効かず期間内の全銘柄が返ってくるため、
+// 銘柄ごとに叩くのではなく1回だけ取得してsymbol => dateの連想配列に変換して使い回す。
+function wp_stocks_fmp_get_earnings_dates() {
+    $cached = get_transient('wp_stocks_fmp_earnings_dates');
+    if ($cached !== false) return $cached;
+
+    $from = date('Y-m-d');
+    $to   = date('Y-m-d', strtotime('+90 days'));
+    $data = wp_stocks_fmp_fetch('earnings-calendar', array('from' => $from, 'to' => $to));
+
+    $map = array();
+    if (is_array($data)) {
+        foreach ($data as $row) {
+            $sym  = $row['symbol'] ?? '';
+            $date = $row['date']   ?? '';
+            if ($sym === '' || $date === '') continue;
+            // 同一銘柄が複数含まれる場合は最初（最も近い予定日）を採用
+            if (!isset($map[$sym])) $map[$sym] = $date;
+        }
+    }
+
+    set_transient('wp_stocks_fmp_earnings_dates', $map, 12 * HOUR_IN_SECONDS);
+    return $map;
+}
+
 function wp_stocks_get_company_info($symbol) {
     $auth = wp_stocks_get_crumb();
     if (!$auth) return false;
@@ -1251,7 +1341,7 @@ function wp_stocks_get_company_info($symbol) {
         $peg_trailing = round($per_for_peg_trailing / $growth_for_peg_trailing, 2);
     }
 
-    return [
+    $result = [
         'market'          => $profile['exchange']                      ?? '',
         'sector'          => wp_stocks_sector_ja($profile['sector'] ?? ''),
         'industry'        => $profile['industry']                      ?? '',
@@ -1277,6 +1367,37 @@ function wp_stocks_get_company_info($symbol) {
         'earnings_date'   => $earnings_date,
         'ipo_year'        => '',
     ];
+
+    // --------------------------------------------------
+    // 米国株：財務スコアカード関連の値をFMPで置き換え（yfinance/Yahoo脱却）
+    // FMP取得に失敗した場合は上記のYahoo由来の値をそのままフォールバックとして使う
+    // --------------------------------------------------
+    $is_us_symbol = (strpos($symbol, '.T') === false);
+    if ($is_us_symbol) {
+        $fmp = wp_stocks_fmp_get_ratios($symbol);
+        if ($fmp !== false) {
+            $result['per']            = $fmp['per'];
+            $result['pbr']            = $fmp['pbr'];
+            $result['eps']            = $fmp['eps'];
+            $result['profit_margin']  = $fmp['profit_margin'];
+            $result['dividend_yield'] = $fmp['dividend_yield'];
+            $result['peg_trailing']   = $fmp['peg_trailing'];
+            $result['peg']            = $fmp['peg'];
+            $result['roe']            = $fmp['roe'];
+            $result['roa']            = $fmp['roa'];
+            $result['equity_ratio']   = $fmp['equity_ratio'];
+            if ($fmp['market_cap'] > 0) $result['market_cap'] = $fmp['market_cap'];
+        } else {
+            wp_stocks_log('error', 'fmp_ratios', $symbol, 'FMPからの財務指標取得に失敗、Yahoo由来の値にフォールバック');
+        }
+
+        $earnings_dates = wp_stocks_fmp_get_earnings_dates();
+        if (!empty($earnings_dates[$symbol])) {
+            $result['earnings_date'] = $earnings_dates[$symbol];
+        }
+    }
+
+    return $result;
 }
 
 
@@ -5047,6 +5168,41 @@ add_action('admin_post_wp_stocks_edgar_test_fetch', function() {
     exit;
 });
 
+add_action('admin_post_wp_stocks_fmp_test_fetch', function() {
+    wp_stocks_require_admin_action('wp_stocks_fmp_test');
+    $symbol = sanitize_text_field($_GET['symbol'] ?? 'AAPL');
+
+    header('Content-Type: text/plain; charset=utf-8');
+
+    echo "Symbol: {$symbol}\n\n";
+
+    $ratios = wp_stocks_fmp_get_ratios($symbol);
+    if ($ratios === false) {
+        echo "FMPからの比率取得に失敗しました（APIキー未設定、または通信エラー。詳細はログを確認してください）\n";
+    } else {
+        echo "--- FMP比率（ratios-ttm / key-metrics-ttm）---\n";
+        foreach ($ratios as $k => $v) {
+            echo str_pad($k, 20) . ": {$v}\n";
+        }
+    }
+
+    echo "\n--- 次回決算予定日（earnings-calendar、全銘柄まとめてtransientキャッシュ）---\n";
+    $earnings_dates = wp_stocks_fmp_get_earnings_dates();
+    echo isset($earnings_dates[$symbol]) ? "{$symbol}: {$earnings_dates[$symbol]}\n" : "{$symbol}: 見つかりませんでした（90日以内に予定なし、またはキャッシュ未更新の可能性）\n";
+    echo "（取得件数：全" . count($earnings_dates) . "銘柄）\n";
+
+    echo "\n--- wp_stocks_get_company_info()統合後の結果（実際に保存される値）---\n";
+    $info = wp_stocks_get_company_info($symbol);
+    if ($info === false) {
+        echo "wp_stocks_get_company_info()が失敗しました\n";
+    } else {
+        foreach ($info as $k => $v) {
+            echo str_pad($k, 20) . ": " . (is_null($v) ? 'null' : $v) . "\n";
+        }
+    }
+    exit;
+});
+
 add_action('admin_post_diagnose_half_year', function() {
     $stock_id = intval($_GET['stock_id'] ?? 0);
     wp_stocks_require_admin_action('wp_stocks_diag_half_' . $stock_id);
@@ -6383,7 +6539,7 @@ if (isset($_POST['wp_stocks_add'])) {
         if (isset($msgs[$_GET['message']])) { [$cls,$txt] = $msgs[$_GET['message']]; echo '<div class="' . $cls . '"><p>' . $txt . '</p></div>'; }
     }
 
-    $stocks = $wpdb->get_results("SELECT * FROM $table ORDER BY status, id DESC");
+    $stocks = $wpdb->get_results("SELECT * FROM $table ORDER BY status, code ASC");
 
     echo '<div class="wrap"><h1>銘柄管理</h1>';
 echo '<h2>銘柄を追加</h2><form method="post">';
@@ -6721,6 +6877,27 @@ function wp_stocks_company_page() {
                 . '📐 適正株価　' . implode('　', $fp_parts)
                 . '</div>';
         }
+        echo '</div>';
+    }
+
+    // 市場区分（日本株のみ・株価の下・タブの上に表示）
+    if (isset($_GET['message']) && $_GET['message'] === 'market_segment_saved') {
+        echo '<div class="updated"><p>市場区分を保存しました。</p></div>';
+    }
+    if (!$is_usd) {
+        echo '<div style="margin-bottom:15px;">';
+        echo '<h3>&#x1F3E2; 市場区分</h3>';
+        echo '<form method="post" action="' . admin_url('admin-post.php') . '">';
+        echo '<input type="hidden" name="action" value="update_market_segment">';
+        echo '<input type="hidden" name="stock_id" value="' . esc_attr($id) . '">';
+        wp_nonce_field('wp_stocks_market_segment_nonce');
+        echo '<select name="market_segment" style="margin-right:10px;">';
+        foreach (['' => '未設定', 'プライム' => 'プライム', 'スタンダード' => 'スタンダード', 'グロース' => 'グロース'] as $mval => $mlabel) {
+            $msel = ($stock->market ?? '') === $mval ? 'selected' : '';
+            echo '<option value="' . esc_attr($mval) . '" ' . $msel . '>' . esc_html($mlabel) . '</option>';
+        }
+        echo '</select>';
+        echo '<button type="submit" class="button button-primary">保存</button></form>';
         echo '</div>';
     }
 
@@ -8502,24 +8679,6 @@ function wp_stocks_company_page() {
     if (isset($_GET['message']) && $_GET['message'] === 'shikiho_saved') {
         echo '<div class="updated"><p>四季報情報を保存しました。</p></div>';
     }
-    if (isset($_GET['message']) && $_GET['message'] === 'market_segment_saved') {
-        echo '<div class="updated"><p>市場区分を保存しました。</p></div>';
-    }
-    // 市場区分（日本株のみ）
-    if (!$is_usd) {
-        echo '<h3>&#x1F3E2; 市場区分</h3>';
-        echo '<form method="post" action="' . admin_url('admin-post.php') . '">';
-        echo '<input type="hidden" name="action" value="update_market_segment">';
-        echo '<input type="hidden" name="stock_id" value="' . esc_attr($id) . '">';
-        wp_nonce_field('wp_stocks_market_segment_nonce');
-        echo '<select name="market_segment" style="margin-right:10px;">';
-        foreach (['' => '未設定', 'プライム' => 'プライム', 'スタンダード' => 'スタンダード', 'グロース' => 'グロース'] as $mval => $mlabel) {
-            $msel = ($stock->market ?? '') === $mval ? 'selected' : '';
-            echo '<option value="' . esc_attr($mval) . '" ' . $msel . '>' . esc_html($mlabel) . '</option>';
-        }
-        echo '</select>';
-        echo '<button type="submit" class="button button-primary">保存</button></form>';
-    }
     if (isset($_GET['message']) && $_GET['message'] === 'sector_override_saved') {
         echo '<div class="updated"><p>業種（手動設定）を保存しました。</p></div>';
     }
@@ -10133,6 +10292,10 @@ function wp_stocks_settings_page() {
         $edinet_api_key = sanitize_text_field($_POST['edinet_api_key'] ?? '');
         update_option('wp_stocks_edinet_api_key', $edinet_api_key);
 
+        // FMP APIキー保存（米国株 財務スコアカード）
+        $fmp_api_key = sanitize_text_field($_POST['fmp_api_key'] ?? '');
+        update_option('wp_stocks_fmp_api_key', $fmp_api_key);
+
         // Webull App Key / App Secret保存
         $webull_app_key = sanitize_text_field($_POST['webull_app_key'] ?? '');
         update_option('wp_stocks_webull_app_key', $webull_app_key);
@@ -10533,6 +10696,13 @@ function wp_stocks_settings_page() {
     echo '<input type="text" name="edinet_api_key" value="' . esc_attr($edinet_api_key) . '" style="width:350px;" placeholder="例：115c8e8db7654e1bbbda5de21c2f5a8a">';
     echo '<p class="description">EDINETから財務データを取得するためのAPIキーです。<a href="https://disclosure2.edinet-fsa.go.jp/" target="_blank">EDINETサイト</a>で取得できます。</p>';
     echo '</td></tr>';
+
+    // Financial Modeling Prep (FMP) APIキー設定（米国株 財務スコアカード：PER/PBR/ROE等）
+    $fmp_api_key = get_option('wp_stocks_fmp_api_key', '');
+    echo '<tr><th>FMP APIキー</th><td>';
+    echo '<input type="text" name="fmp_api_key" value="' . esc_attr($fmp_api_key) . '" style="width:350px;" placeholder="Financial Modeling PrepのAPIキー">';
+    echo '<p class="description">米国株の財務スコアカード（PER・PBR・ROE・自己資本比率・配当利回り・PEG・利益率・次回決算日）取得に使用します（無料Basicプラン：250コール/日）。<a href="https://site.financialmodelingprep.com/developer/docs" target="_blank">FMPサイト</a>で取得できます。</p>';
+    echo '</td></tr>';
     // Webull App Key / App Secret設定
     $webull_app_key = get_option('wp_stocks_webull_app_key', '');
     $webull_app_secret = get_option('wp_stocks_webull_app_secret', '');
@@ -10569,6 +10739,15 @@ function wp_stocks_settings_page() {
     echo '<a href="' . esc_url($edgar_test_aapl_url) . '" class="button" id="wp_stocks_edgar_test_aapl" target="_blank">AAPLで取得テスト</a> ';
     echo '<a href="' . esc_url($edgar_test_ko_url) . '" class="button" id="wp_stocks_edgar_test_ko" target="_blank">KOで取得テスト</a>';
     echo '<p class="description">SEC EDGARから四半期revenue/net_incomeを取得し、プレーンテキストで表示します（yfinance代替の検証用）。</p>';
+    echo '</td></tr>';
+
+    // FMP 動作確認リンク（財務スコアカード：PER/PBR/ROE等のyfinance代替検証用）
+    $fmp_test_aapl_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_fmp_test_fetch&symbol=AAPL'), 'wp_stocks_fmp_test');
+    $fmp_test_ko_url   = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_fmp_test_fetch&symbol=KO'), 'wp_stocks_fmp_test');
+    echo '<tr><th>FMP 動作確認</th><td>';
+    echo '<a href="' . esc_url($fmp_test_aapl_url) . '" class="button" target="_blank">AAPLで取得テスト</a> ';
+    echo '<a href="' . esc_url($fmp_test_ko_url) . '" class="button" target="_blank">KOで取得テスト</a>';
+    echo '<p class="description">FMPから財務スコアカード指標（PER/PBR/ROE/自己資本比率/配当利回り/PEG/利益率/次回決算日）を取得し、プレーンテキストで表示します。</p>';
     echo '</td></tr>';
     echo '<script>
     (function(){
