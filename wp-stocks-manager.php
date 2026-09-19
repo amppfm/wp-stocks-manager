@@ -1235,7 +1235,8 @@ function wp_stocks_fmp_get_ratios($symbol) {
     $m = (is_array($metrics) && !empty($metrics[0])) ? $metrics[0] : array();
 
     // 自己資本比率 = 1 / 財務レバレッジ比率（総資産÷純資産）× 100
-    $leverage     = floatval($m['financialLeverageRatioTTM'] ?? 0);
+    // financialLeverageRatioTTMはkey-metrics-ttmではなくratios-ttm（$r）側のフィールド
+    $leverage     = floatval($r['financialLeverageRatioTTM'] ?? 0);
     $equity_ratio = $leverage > 0 ? round(100 / $leverage, 1) : 0;
 
     return array(
@@ -1385,7 +1386,7 @@ function wp_stocks_get_company_info($symbol) {
             $result['peg']            = $fmp['peg'];
             $result['roe']            = $fmp['roe'];
             $result['roa']            = $fmp['roa'];
-            $result['equity_ratio']   = $fmp['equity_ratio'];
+            if ($fmp['equity_ratio'] > 0) $result['equity_ratio'] = $fmp['equity_ratio'];
             if ($fmp['market_cap'] > 0) $result['market_cap'] = $fmp['market_cap'];
         } else {
             wp_stocks_log('error', 'fmp_ratios', $symbol, 'FMPからの財務指標取得に失敗、Yahoo由来の値にフォールバック');
