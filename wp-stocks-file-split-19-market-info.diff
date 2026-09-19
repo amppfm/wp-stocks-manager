@@ -1,0 +1,447 @@
+diff --git a/wp-stocks-manager.php b/wp-stocks-manager.php
+index ffb10ee..8c5ab8b 100644
+--- a/wp-stocks-manager.php
++++ b/wp-stocks-manager.php
+@@ -42,6 +42,7 @@ require_once WP_STOCKS_PLUGIN_DIR . 'admin/pages/compare.php';
+ require_once WP_STOCKS_PLUGIN_DIR . 'admin/pages/sector.php';
+ require_once WP_STOCKS_PLUGIN_DIR . 'admin/pages/debug.php';
+ require_once WP_STOCKS_PLUGIN_DIR . 'admin/pages/composite-signal.php';
++require_once WP_STOCKS_PLUGIN_DIR . 'admin/pages/market-info.php';
+ 
+ // --------------------------------------------------
+ // セクター名 英語→日本語変換
+@@ -687,170 +688,6 @@ add_action('wp_stocks_jpx_sector_per_cron', function() {
+ });
+ 
+ 
+-// --------------------------------------------------
+-// マーケット情報ページ本体（ニュース／指数／適時開示タブ）
+-// --------------------------------------------------
+-// --------------------------------------------------
+-// マーケット情報「ニュース」タブ用：汎用RSS取得（15分キャッシュ）
+-// --------------------------------------------------
+-function wp_stocks_fetch_generic_rss($url, $limit = 20) {
+-    $cache_key = 'wp_stocks_news_rss_' . md5($url);
+-    $cached    = get_transient($cache_key);
+-    if ($cached !== false) return $cached;
+-
+-    $response = wp_remote_get($url, [
+-        'headers' => [
+-            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+-            'Accept'     => 'application/rss+xml, application/xml, text/xml',
+-        ],
+-        'timeout' => 15,
+-    ]);
+-    if (is_wp_error($response)) {
+-        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), '通信エラー: ' . $response->get_error_message() . ' / URL: ' . $url);
+-        return [];
+-    }
+-
+-    $http_code = wp_remote_retrieve_response_code($response);
+-    $xml_str   = wp_remote_retrieve_body($response);
+-
+-    if ($http_code !== 200) {
+-        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), 'HTTPエラー: ステータスコード ' . $http_code . ' / URL: ' . $url . ' / レスポンス先頭200文字: ' . substr((string)$xml_str, 0, 200));
+-        return [];
+-    }
+-
+-    if (empty($xml_str)) {
+-        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), 'レスポンスが空でした（HTTP ' . $http_code . '） / URL: ' . $url);
+-        return [];
+-    }
+-
+-    libxml_use_internal_errors(true);
+-    $xml = simplexml_load_string($xml_str);
+-    if (!$xml) {
+-        $xml_errors = libxml_get_errors();
+-        $err_msg    = !empty($xml_errors) ? trim($xml_errors[0]->message) : '不明なXMLパースエラー';
+-        libxml_clear_errors();
+-        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), 'XMLパース失敗: ' . $err_msg . ' / URL: ' . $url . ' / レスポンス先頭200文字: ' . substr($xml_str, 0, 200));
+-        return [];
+-    }
+-    if (!isset($xml->channel->item)) {
+-        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), 'RSS形式として解釈できましたが channel/item が見つかりません / URL: ' . $url . ' / レスポンス先頭200文字: ' . substr($xml_str, 0, 200));
+-        return [];
+-    }
+-
+-    $result = [];
+-    $count  = 0;
+-    foreach ($xml->channel->item as $item) {
+-        if ($count >= $limit) break;
+-        $title = trim((string)($item->title ?? ''));
+-        $link  = trim((string)($item->link  ?? ''));
+-        $pub   = (string)($item->pubDate ?? '');
+-        $desc  = trim(strip_tags((string)($item->description ?? '')));
+-        if (empty($title) || empty($link)) continue;
+-        $result[] = [
+-            'title'       => $title,
+-            'link'        => $link,
+-            'pub_date'    => $pub ? date('Y/m/d H:i', strtotime($pub)) : '',
+-            'description' => $desc,
+-        ];
+-        $count++;
+-    }
+-
+-    if (empty($result)) {
+-        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), 'XMLは解析できましたが有効な記事が0件でした（title/linkが空の項目のみ、または0件のitem） / URL: ' . $url);
+-    }
+-
+-    set_transient($cache_key, $result, 15 * MINUTE_IN_SECONDS);
+-    return $result;
+-}
+-
+-function wp_stocks_render_news_feed_list($url, $limit = 20) {
+-    $items = wp_stocks_fetch_generic_rss($url, $limit);
+-    if (empty($items)) {
+-        echo '<p style="color:#888;padding:20px 0;">ニュースを取得できませんでした（フィードが空、または更新が止まっている可能性があります）。</p>';
+-        return;
+-    }
+-    echo '<div style="display:flex;flex-direction:column;gap:12px;max-width:900px;">';
+-    foreach ($items as $it) {
+-        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:6px;padding:12px 15px;">';
+-        if (!empty($it['pub_date'])) {
+-            echo '<div style="font-size:11px;color:#888;margin-bottom:4px;">' . esc_html($it['pub_date']) . '</div>';
+-        }
+-        echo '<a href="' . esc_url($it['link']) . '" target="_blank" rel="noopener" style="font-size:14px;font-weight:bold;color:#0073aa;text-decoration:none;">' . esc_html($it['title']) . '</a>';
+-        if (!empty($it['description'])) {
+-            echo '<div style="font-size:12px;color:#666;margin-top:4px;">' . esc_html($it['description']) . '</div>';
+-        }
+-        echo '</div>';
+-    }
+-    echo '</div>';
+-}
+-
+-function wp_stocks_market_info_page() {
+-    $active_tab = sanitize_text_field($_GET['mtab'] ?? 'news');
+-    if (!in_array($active_tab, ['news', 'index', 'heatmap', 'disclosure'], true)) $active_tab = 'news';
+-
+-    echo '<div class="wrap"><h1>&#x1F30D; マーケット情報</h1>';
+-
+-    $tab_defs = [
+-        'news'       => '&#x1F4F0; ニュース',
+-        'index'      => '&#x1F4CA; 指数',
+-        'heatmap'    => '&#x1F321; ヒートマップ',
+-        'disclosure' => '&#x1F4CB; 適時開示',
+-    ];
+-    echo '<ul style="display:flex;gap:0;border-bottom:2px solid #0073aa;margin:0 0 20px 0;padding:0;list-style:none;flex-wrap:wrap;">';
+-    foreach ($tab_defs as $key => $label) {
+-        $is_active = $active_tab === $key;
+-        $tab_url   = admin_url('admin.php?page=wp-stocks-market&mtab=' . $key);
+-        $style = $is_active
+-            ? 'display:block;padding:10px 18px;background:#0073aa;color:#fff;text-decoration:none;font-size:13px;font-weight:bold;border-radius:4px 4px 0 0;'
+-            : 'display:block;padding:10px 18px;background:#f1f1f1;color:#555;text-decoration:none;font-size:13px;border-radius:4px 4px 0 0;border:1px solid #ddd;border-bottom:none;';
+-        echo '<li style="margin:0 2px 0 0;"><a href="' . esc_url($tab_url) . '" style="' . $style . '">' . $label . '</a></li>';
+-    }
+-    echo '</ul>';
+-
+-    if ($active_tab === 'news') {
+-        $news_sources = [];
+-        for ($news_i = 1; $news_i <= 10; $news_i++) {
+-            $news_label = get_option('wp_stocks_news_rss_label_' . $news_i, '');
+-            $news_url   = get_option('wp_stocks_news_rss_url_' . $news_i, '');
+-            if (!empty($news_label) && !empty($news_url)) {
+-                $news_sources['slot' . $news_i] = ['label' => $news_label, 'url' => $news_url];
+-            }
+-        }
+-
+-        if (empty($news_sources)) {
+-            $settings_url = admin_url('admin.php?page=wp-stocks-settings');
+-            echo '<div style="background:#f8f9fa;border:1px solid #ddd;border-radius:8px;padding:40px;text-align:center;color:#888;">';
+-            echo '<p style="font-size:14px;">&#x1F4F0; まだニュースRSSが登録されていません。<a href="' . esc_url($settings_url) . '">設定ページ</a>から登録してください（最大10件）。</p>';
+-            echo '</div>';
+-        } else {
+-            $ntab = sanitize_text_field($_GET['ntab'] ?? '');
+-            if (!array_key_exists($ntab, $news_sources)) {
+-                $news_keys = array_keys($news_sources);
+-                $ntab = $news_keys[0];
+-            }
+-
+-            echo '<div style="margin-bottom:15px;display:flex;gap:8px;flex-wrap:wrap;">';
+-            foreach ($news_sources as $key => $src) {
+-                $is_ntab_active = $ntab === $key;
+-                $ntab_url = admin_url('admin.php?page=wp-stocks-market&mtab=news&ntab=' . $key);
+-                echo '<a href="' . esc_url($ntab_url) . '" style="padding:6px 16px;border-radius:4px;text-decoration:none;font-size:13px;font-weight:bold;'
+-                    . ($is_ntab_active ? 'background:#0073aa;color:#fff;' : 'background:#f0f0f0;color:#555;border:1px solid #ddd;') . '">'
+-                    . esc_html($src['label']) . '</a>';
+-            }
+-            echo '</div>';
+-
+-            wp_stocks_render_news_feed_list($news_sources[$ntab]['url'], 20);
+-        }
+-    } elseif ($active_tab === 'index') {
+-        wp_stocks_render_market_indices();
+-    } elseif ($active_tab === 'heatmap') {
+-        wp_stocks_sector_page(true, admin_url('admin.php?page=wp-stocks-market&mtab=heatmap'));
+-    } elseif ($active_tab === 'disclosure') {
+-        wp_stocks_render_recent_news_widget(30);
+-    }
+-
+-    echo '</div>';
+-}
+ 
+ // --------------------------------------------------
+ // 管理画面メニュー
+@@ -1975,45 +1812,6 @@ function wp_stocks_render_sector_dropdown_assets() {
+ // ダッシュボード（ウォッチリスト）
+ // ソート・ページネーション付き
+ // --------------------------------------------------
+-// --------------------------------------------------
+-// 最近の適時開示ウィジェット（全銘柄横断）
+-// ダッシュボードやマーケット情報ページなど、複数箇所から
+-// 呼び出せるよう独立関数化。
+-// --------------------------------------------------
+-function wp_stocks_render_recent_news_widget($limit = 15) {
+-    global $wpdb;
+-    $limit = intval($limit);
+-    $recent_news = $wpdb->get_results($wpdb->prepare(
+-        "SELECT sn.*, s.code, s.name
+-         FROM {$wpdb->prefix}stock_news sn
+-         INNER JOIN {$wpdb->prefix}stocks s ON sn.stock_id = s.id
+-         ORDER BY sn.published_at DESC
+-         LIMIT %d",
+-        $limit
+-    ));
+-    if (empty($recent_news)) return;
+-
+-    $news_new_cutoff = date('Y-m-d H:i:s', strtotime('-3 days'));
+-    echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;">';
+-    echo '<h3 style="margin:0 0 12px 0;font-size:14px;">&#x1F4F0; 最近の適時開示</h3>';
+-    echo '<div style="display:flex;flex-direction:column;">';
+-    foreach ($recent_news as $n) {
+-        $news_url = admin_url('admin.php?page=wp-stocks-company&stock_id=' . $n->stock_id . '&ctab=news');
+-        $pub_date = $n->published_at ? date('Y/m/d H:i', strtotime($n->published_at)) : '';
+-        $is_new   = $n->published_at && $n->published_at >= $news_new_cutoff;
+-        echo '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px;">';
+-        if ($is_new) {
+-            echo '<span style="background:#e74c3c;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:bold;flex-shrink:0;">NEW</span>';
+-        } else {
+-            echo '<span style="width:32px;flex-shrink:0;"></span>';
+-        }
+-        echo '<span style="color:#888;flex-shrink:0;white-space:nowrap;">' . esc_html($pub_date) . '</span>';
+-        echo '<a href="' . esc_url($news_url) . '" style="color:#0073aa;text-decoration:none;font-weight:bold;flex-shrink:0;white-space:nowrap;">' . esc_html($n->code) . ' ' . esc_html($n->name) . '</a>';
+-        echo '<a href="' . esc_url($n->link) . '" target="_blank" style="color:#333;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' . esc_html($n->title) . '</a>';
+-        echo '</div>';
+-    }
+-    echo '</div></div>';
+-}
+ 
+ 
+ // --------------------------------------------------
+diff --git a/admin/pages/market-info.php b/admin/pages/market-info.php
+new file mode 100644
+index 0000000..561cd46
+--- /dev/null
++++ b/admin/pages/market-info.php
+@@ -0,0 +1,212 @@
++<?php
++/**
++ * WP Stocks Manager — 管理画面: マーケット情報ページ（ニュース／指数／適時開示タブ）
++ * wp-stocks-manager.php から分割（Stage 1 ファイル分割）
++ */
++
++if (!defined('ABSPATH')) exit;
++
++// --------------------------------------------------
++// マーケット情報ページ本体（ニュース／指数／適時開示タブ）
++// --------------------------------------------------
++// --------------------------------------------------
++// マーケット情報「ニュース」タブ用：汎用RSS取得（15分キャッシュ）
++// --------------------------------------------------
++function wp_stocks_fetch_generic_rss($url, $limit = 20) {
++    $cache_key = 'wp_stocks_news_rss_' . md5($url);
++    $cached    = get_transient($cache_key);
++    if ($cached !== false) return $cached;
++
++    $response = wp_remote_get($url, [
++        'headers' => [
++            'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
++            'Accept'     => 'application/rss+xml, application/xml, text/xml',
++        ],
++        'timeout' => 15,
++    ]);
++    if (is_wp_error($response)) {
++        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), '通信エラー: ' . $response->get_error_message() . ' / URL: ' . $url);
++        return [];
++    }
++
++    $http_code = wp_remote_retrieve_response_code($response);
++    $xml_str   = wp_remote_retrieve_body($response);
++
++    if ($http_code !== 200) {
++        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), 'HTTPエラー: ステータスコード ' . $http_code . ' / URL: ' . $url . ' / レスポンス先頭200文字: ' . substr((string)$xml_str, 0, 200));
++        return [];
++    }
++
++    if (empty($xml_str)) {
++        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), 'レスポンスが空でした（HTTP ' . $http_code . '） / URL: ' . $url);
++        return [];
++    }
++
++    libxml_use_internal_errors(true);
++    $xml = simplexml_load_string($xml_str);
++    if (!$xml) {
++        $xml_errors = libxml_get_errors();
++        $err_msg    = !empty($xml_errors) ? trim($xml_errors[0]->message) : '不明なXMLパースエラー';
++        libxml_clear_errors();
++        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), 'XMLパース失敗: ' . $err_msg . ' / URL: ' . $url . ' / レスポンス先頭200文字: ' . substr($xml_str, 0, 200));
++        return [];
++    }
++    if (!isset($xml->channel->item)) {
++        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), 'RSS形式として解釈できましたが channel/item が見つかりません / URL: ' . $url . ' / レスポンス先頭200文字: ' . substr($xml_str, 0, 200));
++        return [];
++    }
++
++    $result = [];
++    $count  = 0;
++    foreach ($xml->channel->item as $item) {
++        if ($count >= $limit) break;
++        $title = trim((string)($item->title ?? ''));
++        $link  = trim((string)($item->link  ?? ''));
++        $pub   = (string)($item->pubDate ?? '');
++        $desc  = trim(strip_tags((string)($item->description ?? '')));
++        if (empty($title) || empty($link)) continue;
++        $result[] = [
++            'title'       => $title,
++            'link'        => $link,
++            'pub_date'    => $pub ? date('Y/m/d H:i', strtotime($pub)) : '',
++            'description' => $desc,
++        ];
++        $count++;
++    }
++
++    if (empty($result)) {
++        wp_stocks_log('error', 'fetch_news_rss', substr($url, 0, 30), 'XMLは解析できましたが有効な記事が0件でした（title/linkが空の項目のみ、または0件のitem） / URL: ' . $url);
++    }
++
++    set_transient($cache_key, $result, 15 * MINUTE_IN_SECONDS);
++    return $result;
++}
++
++function wp_stocks_render_news_feed_list($url, $limit = 20) {
++    $items = wp_stocks_fetch_generic_rss($url, $limit);
++    if (empty($items)) {
++        echo '<p style="color:#888;padding:20px 0;">ニュースを取得できませんでした（フィードが空、または更新が止まっている可能性があります）。</p>';
++        return;
++    }
++    echo '<div style="display:flex;flex-direction:column;gap:12px;max-width:900px;">';
++    foreach ($items as $it) {
++        echo '<div style="background:#fff;border:1px solid #ddd;border-radius:6px;padding:12px 15px;">';
++        if (!empty($it['pub_date'])) {
++            echo '<div style="font-size:11px;color:#888;margin-bottom:4px;">' . esc_html($it['pub_date']) . '</div>';
++        }
++        echo '<a href="' . esc_url($it['link']) . '" target="_blank" rel="noopener" style="font-size:14px;font-weight:bold;color:#0073aa;text-decoration:none;">' . esc_html($it['title']) . '</a>';
++        if (!empty($it['description'])) {
++            echo '<div style="font-size:12px;color:#666;margin-top:4px;">' . esc_html($it['description']) . '</div>';
++        }
++        echo '</div>';
++    }
++    echo '</div>';
++}
++
++function wp_stocks_market_info_page() {
++    $active_tab = sanitize_text_field($_GET['mtab'] ?? 'news');
++    if (!in_array($active_tab, ['news', 'index', 'heatmap', 'disclosure'], true)) $active_tab = 'news';
++
++    echo '<div class="wrap"><h1>&#x1F30D; マーケット情報</h1>';
++
++    $tab_defs = [
++        'news'       => '&#x1F4F0; ニュース',
++        'index'      => '&#x1F4CA; 指数',
++        'heatmap'    => '&#x1F321; ヒートマップ',
++        'disclosure' => '&#x1F4CB; 適時開示',
++    ];
++    echo '<ul style="display:flex;gap:0;border-bottom:2px solid #0073aa;margin:0 0 20px 0;padding:0;list-style:none;flex-wrap:wrap;">';
++    foreach ($tab_defs as $key => $label) {
++        $is_active = $active_tab === $key;
++        $tab_url   = admin_url('admin.php?page=wp-stocks-market&mtab=' . $key);
++        $style = $is_active
++            ? 'display:block;padding:10px 18px;background:#0073aa;color:#fff;text-decoration:none;font-size:13px;font-weight:bold;border-radius:4px 4px 0 0;'
++            : 'display:block;padding:10px 18px;background:#f1f1f1;color:#555;text-decoration:none;font-size:13px;border-radius:4px 4px 0 0;border:1px solid #ddd;border-bottom:none;';
++        echo '<li style="margin:0 2px 0 0;"><a href="' . esc_url($tab_url) . '" style="' . $style . '">' . $label . '</a></li>';
++    }
++    echo '</ul>';
++
++    if ($active_tab === 'news') {
++        $news_sources = [];
++        for ($news_i = 1; $news_i <= 10; $news_i++) {
++            $news_label = get_option('wp_stocks_news_rss_label_' . $news_i, '');
++            $news_url   = get_option('wp_stocks_news_rss_url_' . $news_i, '');
++            if (!empty($news_label) && !empty($news_url)) {
++                $news_sources['slot' . $news_i] = ['label' => $news_label, 'url' => $news_url];
++            }
++        }
++
++        if (empty($news_sources)) {
++            $settings_url = admin_url('admin.php?page=wp-stocks-settings');
++            echo '<div style="background:#f8f9fa;border:1px solid #ddd;border-radius:8px;padding:40px;text-align:center;color:#888;">';
++            echo '<p style="font-size:14px;">&#x1F4F0; まだニュースRSSが登録されていません。<a href="' . esc_url($settings_url) . '">設定ページ</a>から登録してください（最大10件）。</p>';
++            echo '</div>';
++        } else {
++            $ntab = sanitize_text_field($_GET['ntab'] ?? '');
++            if (!array_key_exists($ntab, $news_sources)) {
++                $news_keys = array_keys($news_sources);
++                $ntab = $news_keys[0];
++            }
++
++            echo '<div style="margin-bottom:15px;display:flex;gap:8px;flex-wrap:wrap;">';
++            foreach ($news_sources as $key => $src) {
++                $is_ntab_active = $ntab === $key;
++                $ntab_url = admin_url('admin.php?page=wp-stocks-market&mtab=news&ntab=' . $key);
++                echo '<a href="' . esc_url($ntab_url) . '" style="padding:6px 16px;border-radius:4px;text-decoration:none;font-size:13px;font-weight:bold;'
++                    . ($is_ntab_active ? 'background:#0073aa;color:#fff;' : 'background:#f0f0f0;color:#555;border:1px solid #ddd;') . '">'
++                    . esc_html($src['label']) . '</a>';
++            }
++            echo '</div>';
++
++            wp_stocks_render_news_feed_list($news_sources[$ntab]['url'], 20);
++        }
++    } elseif ($active_tab === 'index') {
++        wp_stocks_render_market_indices();
++    } elseif ($active_tab === 'heatmap') {
++        wp_stocks_sector_page(true, admin_url('admin.php?page=wp-stocks-market&mtab=heatmap'));
++    } elseif ($active_tab === 'disclosure') {
++        wp_stocks_render_recent_news_widget(30);
++    }
++
++    echo '</div>';
++}
++
++// --------------------------------------------------
++// 最近の適時開示ウィジェット（全銘柄横断）
++// ダッシュボードやマーケット情報ページなど、複数箇所から
++// 呼び出せるよう独立関数化。
++// --------------------------------------------------
++function wp_stocks_render_recent_news_widget($limit = 15) {
++    global $wpdb;
++    $limit = intval($limit);
++    $recent_news = $wpdb->get_results($wpdb->prepare(
++        "SELECT sn.*, s.code, s.name
++         FROM {$wpdb->prefix}stock_news sn
++         INNER JOIN {$wpdb->prefix}stocks s ON sn.stock_id = s.id
++         ORDER BY sn.published_at DESC
++         LIMIT %d",
++        $limit
++    ));
++    if (empty($recent_news)) return;
++
++    $news_new_cutoff = date('Y-m-d H:i:s', strtotime('-3 days'));
++    echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;">';
++    echo '<h3 style="margin:0 0 12px 0;font-size:14px;">&#x1F4F0; 最近の適時開示</h3>';
++    echo '<div style="display:flex;flex-direction:column;">';
++    foreach ($recent_news as $n) {
++        $news_url = admin_url('admin.php?page=wp-stocks-company&stock_id=' . $n->stock_id . '&ctab=news');
++        $pub_date = $n->published_at ? date('Y/m/d H:i', strtotime($n->published_at)) : '';
++        $is_new   = $n->published_at && $n->published_at >= $news_new_cutoff;
++        echo '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:13px;">';
++        if ($is_new) {
++            echo '<span style="background:#e74c3c;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:bold;flex-shrink:0;">NEW</span>';
++        } else {
++            echo '<span style="width:32px;flex-shrink:0;"></span>';
++        }
++        echo '<span style="color:#888;flex-shrink:0;white-space:nowrap;">' . esc_html($pub_date) . '</span>';
++        echo '<a href="' . esc_url($news_url) . '" style="color:#0073aa;text-decoration:none;font-weight:bold;flex-shrink:0;white-space:nowrap;">' . esc_html($n->code) . ' ' . esc_html($n->name) . '</a>';
++        echo '<a href="' . esc_url($n->link) . '" target="_blank" style="color:#333;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' . esc_html($n->title) . '</a>';
++        echo '</div>';
++    }
++    echo '</div></div>';
++}
