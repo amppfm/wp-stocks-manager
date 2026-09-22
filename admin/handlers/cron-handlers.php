@@ -176,6 +176,7 @@ add_action('wp_stocks_company_cron', function() {
     $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks ORDER BY id ASC");
     $ok = $ng = 0;
     $edgar_ok = $edgar_ng = 0;
+    $jquants_ok = $jquants_ng = 0;
 
     foreach ($stocks as $s) {
         $is_usd = ($s->currency ?? 'JPY') === 'USD';
@@ -187,6 +188,10 @@ add_action('wp_stocks_company_cron', function() {
         if ($is_usd) {
             $edgar_result = wp_stocks_fetch_quarterly_financials_edgar($s->id, $s->code);
             if ($edgar_result) $edgar_ok++; else $edgar_ng++;
+        } else {
+            // 日本株はついでにJ-Quantsの予想EPS等も週次で取得する
+            $jquants_result = wp_stocks_jquants_sync_stock($s->id, $s->code);
+            if ($jquants_result) $jquants_ok++; else $jquants_ng++;
         }
 
         // 負荷対策：3件ごとに5秒sleep、それ以外は2秒
@@ -194,5 +199,9 @@ add_action('wp_stocks_company_cron', function() {
         else sleep(2);
     }
 
-    wp_stocks_log('info', 'company_cron', 'ALL', "企業情報週次更新完了：成功{$ok}件 / 失敗{$ng}件（うち米国株EDGAR財務：成功{$edgar_ok}件 / 失敗{$edgar_ng}件）");
+    $msg = sprintf(
+        '企業情報週次更新完了：成功%d件 / 失敗%d件（うち米国株EDGAR財務：成功%d件 / 失敗%d件、日本株J-Quants：成功%d件 / 失敗%d件）',
+        $ok, $ng, $edgar_ok, $edgar_ng, $jquants_ok, $jquants_ng
+    );
+    wp_stocks_log('info', 'company_cron', 'ALL', $msg);
 });

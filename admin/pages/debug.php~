@@ -4,7 +4,6 @@
  * wp-stocks-manager.php から分割（Stage 1 ファイル分割）
  */
 
-
 if (!defined('ABSPATH')) exit;
 
 // --------------------------------------------------

@@ -49,7 +49,6 @@ require_once WP_STOCKS_PLUGIN_DIR . 'admin/pages/settings.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'admin/handlers/menu.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'admin/handlers/admin-post-handlers.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'admin/handlers/cron-handlers.php';
-require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/jquants.php';
 
 // --------------------------------------------------
 // セクター名 英語→日本語変換
@@ -368,27 +367,6 @@ function wp_stocks_get_company_info($symbol) {
         $earnings_dates = wp_stocks_fmp_get_earnings_dates();
         if (!empty($earnings_dates[$symbol])) {
             $result['earnings_date'] = $earnings_dates[$symbol];
-        }
-    } else {
-        // 日本株：J-Quantsの予想EPS等でPEG・EPS関連指標を算出（yfinance予想PEG不備の代替）
-        $jquants_code = str_replace('.T', '', $symbol);
-        $jquants = wp_stocks_jquants_get_fins_summary($jquants_code);
-        if ($jquants !== false) {
-            if ($jquants['forecast_eps'] !== null) $result['forward_eps'] = $jquants['forecast_eps'];
-            if ($jquants['equity_ratio'] !== null) $result['equity_ratio'] = round($jquants['equity_ratio'] * 100, 1);
-            if ($jquants['roe'] !== null)           $result['roe']          = round($jquants['roe'] * 100, 1);
-
-            // 予想EPS成長率(%) = (来期予想EPS - 当期予想EPS) / 当期予想EPS × 100
-            if (!empty($jquants['forecast_eps']) && !empty($jquants['next_fy_forecast_eps']) && $jquants['forecast_eps'] > 0) {
-                $growth_rate = ($jquants['next_fy_forecast_eps'] - $jquants['forecast_eps']) / $jquants['forecast_eps'] * 100;
-                if ($growth_rate > 0 && $result['forward_per'] > 0) {
-                    $result['peg'] = round($result['forward_per'] / $growth_rate, 2);
-                } else {
-                    $result['peg'] = 0; // 成長率がマイナス/ゼロはPEGとして意味を持たないため非表示扱い
-                }
-            }
-        } else {
-            wp_stocks_log('error', 'jquants_ratios', $symbol, 'J-Quantsからの財務指標取得に失敗、Yahoo由来の値にフォールバック');
         }
     }
 

@@ -222,31 +222,12 @@ function wp_stocks_manager_create_tables() {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
         UNIQUE KEY ym_market_sector (report_month, market_segment, sector)
-	) $charset;";
-    $sql_valuation_history = "CREATE TABLE IF NOT EXISTS {$wpdb->prefix}stock_valuation_history (
-        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        stock_id BIGINT UNSIGNED NOT NULL,
-        record_date DATE NOT NULL,
-        price FLOAT DEFAULT NULL,
-        actual_eps FLOAT DEFAULT NULL,
-        forecast_eps FLOAT DEFAULT NULL,
-        bps FLOAT DEFAULT NULL,
-        actual_per FLOAT DEFAULT NULL,
-        forecast_per FLOAT DEFAULT NULL,
-        pbr FLOAT DEFAULT NULL,
-        dividend_yield FLOAT DEFAULT NULL,
-        eps_source VARCHAR(20) DEFAULT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (id),
-        UNIQUE KEY stock_date (stock_id, record_date),
-        INDEX(stock_id)
     ) $charset;";
 
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-//    dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4); dbDelta($sql5); dbDelta($sql6); dbDelta($sql_fin); dbDelta($sql7); dbDelta($sql8); dbDelta($sql9); dbDelta($sql10); dbDelta($sql_signal_history); dbDelta($sql_jpx_sector_per);
-    dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4); dbDelta($sql5); dbDelta($sql6); dbDelta($sql_fin); dbDelta($sql7); dbDelta($sql8); dbDelta($sql9); dbDelta($sql10); dbDelta($sql_signal_history); dbDelta($sql_jpx_sector_per); dbDelta($sql_valuation_history);
-	
-	// dbDelta()は "CREATE TABLE IF NOT EXISTS" の書き方だとテーブル名の抽出に失敗し
+    dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4); dbDelta($sql5); dbDelta($sql6); dbDelta($sql_fin); dbDelta($sql7); dbDelta($sql8); dbDelta($sql9); dbDelta($sql10); dbDelta($sql_signal_history); dbDelta($sql_jpx_sector_per);
+
+    // dbDelta()は "CREATE TABLE IF NOT EXISTS" の書き方だとテーブル名の抽出に失敗し
     // （正規表現が最初の1単語である"IF"をテーブル名と誤認識する既知の不具合）、
     // 既存テーブルへのカラム追加が反映されないため、ここだけ明示的にALTER TABLEで追加する。
     $wsm_qf_columns = $wpdb->get_col("DESC {$wpdb->prefix}stock_quarterly_financials", 0);
@@ -278,20 +259,7 @@ function wp_stocks_manager_create_tables() {
         'screen_shikiho'    => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN screen_shikiho TINYINT(1) DEFAULT 0 AFTER screen_net_income",
         'is_sector_etf'     => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN is_sector_etf TINYINT(1) DEFAULT 0 AFTER sector",
         'sector_override'   => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN sector_override VARCHAR(50) DEFAULT '' AFTER sector",
-        'sector_override'   => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN sector_override VARCHAR(50) DEFAULT '' AFTER sector",
-        'jquants_eps'                      => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_eps FLOAT DEFAULT NULL AFTER sector_override",
-        'jquants_forecast_eps'             => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_forecast_eps FLOAT DEFAULT NULL AFTER jquants_eps",
-        'jquants_next_fy_forecast_eps'     => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_next_fy_forecast_eps FLOAT DEFAULT NULL AFTER jquants_forecast_eps",
-        'jquants_bps'                      => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_bps FLOAT DEFAULT NULL AFTER jquants_next_fy_forecast_eps",
-        'jquants_equity_ratio'             => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_equity_ratio FLOAT DEFAULT NULL AFTER jquants_bps",
-        'jquants_roe'                      => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_roe FLOAT DEFAULT NULL AFTER jquants_equity_ratio",
-        'jquants_forecast_dividend_annual' => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_forecast_dividend_annual FLOAT DEFAULT NULL AFTER jquants_roe",
-        'jquants_industry_ja'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_industry_ja VARCHAR(100) DEFAULT '' AFTER jquants_forecast_dividend_annual",
-        'jquants_updated_at'               => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_updated_at DATETIME DEFAULT NULL AFTER jquants_industry_ja",
-        'manual_forecast_eps'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_forecast_eps FLOAT DEFAULT 0 AFTER jquants_updated_at",
-        'manual_next_fy_forecast_eps'      => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_next_fy_forecast_eps FLOAT DEFAULT 0 AFTER manual_forecast_eps",
     ];
-
     foreach ($new_cols as $col => $sql) {
         if (!in_array($col, $columns)) $wpdb->query($sql);
     }

@@ -537,7 +537,7 @@ function wp_stocks_settings_page() {
 	// J-Quants APIキー設定
     $jquants_api_key = get_option('wp_stocks_jquants_api_key', '');
     echo '<tr><th>J-Quants APIキー</th><td>';
-	echo '<input type="text" name="jquants_api_key" value="' . esc_attr($jquants_api_key) . '" style="width:400px;" autocomplete="new-password">';
+    echo '<input type="password" name="jquants_api_key" value="' . esc_attr($jquants_api_key) . '" style="width:400px;" autocomplete="new-password">';
     echo '<p class="description">J-Quants（無料プラン）のダッシュボードから発行したAPIキーを入力してください。予想EPS・PER/PBR等の取得に使用します（取得データは最大12週間遅延）。</p>';
     echo '</td></tr>';
 
