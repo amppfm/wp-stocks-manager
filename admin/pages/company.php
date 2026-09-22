@@ -2025,6 +2025,24 @@ function wp_stocks_company_page() {
     echo '<textarea name="memo" style="width:100%;height:150px;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:4px;resize:vertical;" placeholder="例：PER10倍以下で割安。次の決算で増収増益なら買い増し検討。">' . esc_textarea($stock->memo ?? '') . '</textarea>';
     echo '<p style="margin-top:8px;"><button type="submit" class="button button-primary">メモを保存</button></p>';
     echo '</form>';
+
+    // 予想EPS手動入力（日本株のみ。J-Quantsは無料プランのため最大12週遅延、決算直後の即時反映用）
+    if (!$is_usd) {
+        echo '<h3 style="margin-top:25px;">&#x270F;&#xFE0F; 予想EPS手動入力（J-Quants上書き）</h3>';
+        $jq_updated = !empty($stock->jquants_updated_at) ? esc_html($stock->jquants_updated_at) : '未取得';
+        echo '<p style="color:#666;font-size:13px;">J-Quants自動取得値（当期予想: ' . esc_html($stock->jquants_forecast_eps ?? 'N/A') . '円 / 来期予想: ' . esc_html($stock->jquants_next_fy_forecast_eps ?? 'N/A') . '円、取得日時: ' . $jq_updated . '）。決算直後などJ-Quantsの反映（最大12週遅延）を待てない場合は、下記に手動値を入力すると自動取得より優先されます。空欄に戻すとJ-Quants値に戻ります。</p>';
+        echo '<form method="post" action="' . admin_url('admin-post.php') . '">';
+        echo '<input type="hidden" name="action" value="update_manual_forecast_eps">';
+        echo '<input type="hidden" name="stock_id" value="' . esc_attr($id) . '">';
+        wp_nonce_field('wp_stocks_manual_forecast_eps_nonce');
+        echo '<table class="form-table"><tbody>';
+        echo '<tr><th>当期予想EPS（円）</th><td><input type="number" name="manual_forecast_eps" value="' . esc_attr(($stock->manual_forecast_eps ?? 0) > 0 ? $stock->manual_forecast_eps : '') . '" step="0.01" style="width:150px;" placeholder="自動取得"></td></tr>';
+        echo '<tr><th>来期予想EPS（円）</th><td><input type="number" name="manual_next_fy_forecast_eps" value="' . esc_attr(($stock->manual_next_fy_forecast_eps ?? 0) > 0 ? $stock->manual_next_fy_forecast_eps : '') . '" step="0.01" style="width:150px;" placeholder="自動取得"></td></tr>';
+        echo '</tbody></table>';
+        echo '<p style="margin-top:8px;"><button type="submit" class="button button-primary">手動値を保存</button></p>';
+        echo '</form>';
+    }
+
     // 四季報入力（日本株のみ）
     if (!$is_usd) {
         echo '<h3 style="margin-top:25px;">&#x1F4D6; 四季報情報</h3>';

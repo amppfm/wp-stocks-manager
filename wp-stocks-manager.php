@@ -371,24 +371,52 @@ function wp_stocks_get_company_info($symbol) {
         }
     } else {
         // 日本株：J-Quantsの予想EPS等でPEG・EPS関連指標を算出（yfinance予想PEG不備の代替）
+        global $wpdb;
         $jquants_code = str_replace('.T', '', $symbol);
+
+        // 手動入力値を確認（決算直後などJ-Quantsの遅延を待てない場合、自動取得より優先）
+        $manual = $wpdb->get_row($wpdb->prepare(
+            "SELECT manual_forecast_eps, manual_next_fy_forecast_eps FROM {$wpdb->prefix}stocks WHERE code = %s",
+            $jquants_code
+        ));
+        $manual_feps   = ($manual && $manual->manual_forecast_eps > 0)         ? floatval($manual->manual_forecast_eps)         : null;
+        $manual_nxfeps = ($manual && $manual->manual_next_fy_forecast_eps > 0) ? floatval($manual->manual_next_fy_forecast_eps) : null;
+
         $jquants = wp_stocks_jquants_get_fins_summary($jquants_code);
         if ($jquants !== false) {
             if ($jquants['forecast_eps'] !== null) $result['forward_eps'] = $jquants['forecast_eps'];
             if ($jquants['equity_ratio'] !== null) $result['equity_ratio'] = round($jquants['equity_ratio'] * 100, 1);
             if ($jquants['roe'] !== null)           $result['roe']          = round($jquants['roe'] * 100, 1);
-
-            // 予想EPS成長率(%) = (来期予想EPS - 当期予想EPS) / 当期予想EPS × 100
-            if (!empty($jquants['forecast_eps']) && !empty($jquants['next_fy_forecast_eps']) && $jquants['forecast_eps'] > 0) {
-                $growth_rate = ($jquants['next_fy_forecast_eps'] - $jquants['forecast_eps']) / $jquants['forecast_eps'] * 100;
-                if ($growth_rate > 0 && $result['forward_per'] > 0) {
-                    $result['peg'] = round($result['forward_per'] / $growth_rate, 2);
-                } else {
-                    $result['peg'] = 0; // 成長率がマイナス/ゼロはPEGとして意味を持たないため非表示扱い
-                }
-            }
         } else {
             wp_stocks_log('error', 'jquants_ratios', $symbol, 'J-Quantsからの財務指標取得に失敗、Yahoo由来の値にフォールバック');
+        }
+
+        // PEG算出用のEPS：手動入力があればそちらを優先、なければJ-Quants値
+        $feps   = $manual_feps   ?? ($jquants !== false ? $jquants['forecast_eps'] : null);
+        $nxfeps = $manual_nxfeps ?? ($jquants !== false ? $jquants['next_fy_forecast_eps'] : null);
+
+        // 手動の当期予想EPSがあれば画面表示（forward_eps）にも反映
+        if ($manual_feps !== null) $result['forward_eps'] = $manual_feps;
+
+        // 予想EPS成長率(%) = (来期予想EPS - 当期予想EPS) / 当期予想EPS × 100
+        if (!empty($feps) && !empty($nxfeps) && $feps > 0) {
+            $growth_rate = ($nxfeps - $feps) / $feps * 100;
+
+            // PEG専用の予想PER：Yahoo予想PER(forward_per)がN/Aの銘柄でも算出できるよう、
+            // 現在株価÷予想EPSでその場で計算する（画面の「PER（予想）」表示自体はYahoo値のまま変更しない）
+            $peg_forward_per = $result['forward_per'];
+            if ($peg_forward_per <= 0) {
+                $price_data = wp_stocks_get_price($symbol);
+                if ($price_data && !empty($price_data['c']) && $price_data['c'] > 0) {
+                    $peg_forward_per = $price_data['c'] / $feps;
+                }
+            }
+
+            if ($growth_rate > 0 && $peg_forward_per > 0) {
+                $result['peg'] = round($peg_forward_per / $growth_rate, 2);
+            } else {
+                $result['peg'] = 0; // 成長率がマイナス/ゼロはPEGとして意味を持たないため非表示扱い
+            }
         }
     }
 

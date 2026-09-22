@@ -788,6 +788,29 @@ add_action('admin_post_toggle_watchlist', function() {
     exit;
 });
 
+add_action('admin_post_update_manual_forecast_eps', function() {
+    wp_stocks_require_admin_action('wp_stocks_manual_forecast_eps_nonce');
+    global $wpdb;
+    $id = intval($_POST['stock_id']);
+    // 空欄は0として保存（0はwp_stocks_get_forecast_eps_growth側で「未入力」扱いになりJ-Quants値にフォールバックする）
+    $manual_forecast_eps         = floatval($_POST['manual_forecast_eps'] ?? 0);
+    $manual_next_fy_forecast_eps = floatval($_POST['manual_next_fy_forecast_eps'] ?? 0);
+    $wpdb->update($wpdb->prefix . 'stocks', [
+        'manual_forecast_eps'         => $manual_forecast_eps,
+        'manual_next_fy_forecast_eps' => $manual_next_fy_forecast_eps,
+    ], ['id' => $id]);
+
+    // 保存直後にPEG等を再計算して反映する（次回cronを待たせない）
+    $stock = $wpdb->get_row($wpdb->prepare("SELECT code, currency FROM {$wpdb->prefix}stocks WHERE id = %d", $id));
+    if ($stock) {
+        $symbol = ($stock->currency === 'USD') ? $stock->code : $stock->code . '.T';
+        wp_stocks_save_company_info($id, $symbol);
+    }
+
+    wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id . '&message=manual_forecast_eps_saved'));
+    exit;
+});
+
 add_action('admin_post_update_memo', function() {
     wp_stocks_require_admin_action('wp_stocks_memo_nonce');
     global $wpdb;
