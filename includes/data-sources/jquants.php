@@ -50,7 +50,19 @@ function wp_stocks_jquants_get_fins_summary($code) {
     });
     $latest = $records[0];
 
+    // ROEは本決算(FY)開示でしか算出されないため、直近の非空値を別途探す
+    // （四半期開示のタイミングでは空になるが、それは「未計算」であって「悪化」ではないため
+    //   直近の本決算時点の実力値をそのまま採用する）
+    $latest_roe = null;
+    foreach ($records as $r) {
+        if (isset($r['ROE']) && $r['ROE'] !== '') {
+            $latest_roe = $r['ROE'];
+            break;
+        }
+    }
+
     // 空文字列はnullとして扱う（FEPSが期末近くで空になるケースに対応）
+
     $clean = function($v) {
         return ($v === '' || $v === null) ? null : floatval($v);
     };
@@ -67,7 +79,7 @@ function wp_stocks_jquants_get_fins_summary($code) {
         'next_fy_forecast_eps'     => $clean($latest['NxFEPS'] ?? null),
         'bps'                      => $clean($latest['BPS'] ?? null),
         'equity_ratio'             => $clean($latest['EqAR'] ?? null),
-        'roe'                      => $clean($latest['ROE'] ?? null),
+        'roe'                      => $clean($latest_roe),
         'forecast_dividend_annual' => $clean($latest['FDivAnn'] ?? null),
         'disc_date'                => $latest['DiscDate'] ?? null,
     ];
@@ -137,4 +149,4 @@ function wp_stocks_jquants_test_fetch() {
     echo "=== wp_stocks_jquants_get_fins_summary() のパース結果 ===\n";
     print_r(wp_stocks_jquants_get_fins_summary($code));
     exit;
-}
+	}
