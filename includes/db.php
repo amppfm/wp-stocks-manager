@@ -287,7 +287,12 @@ function wp_stocks_manager_create_tables() {
         'jquants_roe'                      => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_roe FLOAT DEFAULT NULL AFTER jquants_equity_ratio",
         'jquants_forecast_dividend_annual' => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_forecast_dividend_annual FLOAT DEFAULT NULL AFTER jquants_roe",
         'jquants_industry_ja'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_industry_ja VARCHAR(100) DEFAULT '' AFTER jquants_forecast_dividend_annual",
-        'jquants_updated_at'               => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_updated_at DATETIME DEFAULT NULL AFTER jquants_industry_ja",
+        // ★追加：J-Quants equities/master（上場銘柄一覧）由来の33業種・市場区分
+        'jquants_sector33_code'            => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_sector33_code VARCHAR(10) DEFAULT '' AFTER jquants_industry_ja",
+        'jquants_sector33_name'            => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_sector33_name VARCHAR(100) DEFAULT '' AFTER jquants_sector33_code",
+        'jquants_market_code'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_market_code VARCHAR(10) DEFAULT '' AFTER jquants_sector33_name",
+        'jquants_market_name'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_market_name VARCHAR(50) DEFAULT '' AFTER jquants_market_code",
+        'jquants_updated_at'               => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_updated_at DATETIME DEFAULT NULL AFTER jquants_market_name",
         'manual_forecast_eps'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_forecast_eps FLOAT DEFAULT 0 AFTER jquants_updated_at",
         'manual_next_fy_forecast_eps'      => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_next_fy_forecast_eps FLOAT DEFAULT 0 AFTER manual_forecast_eps",
     ];
