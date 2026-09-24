@@ -248,12 +248,20 @@ function wp_stocks_settings_page() {
     if (isset($_POST['wp_stocks_bulk_resector_shikiho'])) {
         check_admin_referer('wp_stocks_settings_nonce');
         $shikiho_stocks = $wpdb->get_results(
-            "SELECT id, code, name, shikiho, sector FROM {$wpdb->prefix}stocks WHERE shikiho IS NOT NULL AND shikiho != ''"
+            "SELECT id, code, name, shikiho, sector, sector_override, jquants_sector33_name
+             FROM {$wpdb->prefix}stocks WHERE shikiho IS NOT NULL AND shikiho != ''"
         );
-        $resector_updated = 0;
-        $resector_skipped = 0;
-        $resector_samples = [];
+        $resector_updated  = 0;
+        $resector_skipped  = 0; // 抽出失敗（[]が見つからない等）
+        $resector_protected = 0; // sector_override/J-Quants優先のため対象外
+        $resector_samples  = [];
         foreach ($shikiho_stocks as $rs) {
+            // ★変更：手動指定（sector_override）またはJ-Quantsの33業種が既にある銘柄は対象外とし、
+            // 四季報の[]内自動判定は「どちらも無い場合のみのフォールバック」に降格する
+            if (!empty($rs->sector_override) || !empty($rs->jquants_sector33_name)) {
+                $resector_protected++;
+                continue;
+            }
             $new_sector = wp_stocks_extract_sector_from_shikiho($rs->shikiho);
             if (!empty($new_sector)) {
                 $wpdb->update($wpdb->prefix . 'stocks', ['sector' => $new_sector], ['id' => $rs->id]);
@@ -266,10 +274,10 @@ function wp_stocks_settings_page() {
             }
         }
         wp_stocks_log('info', 'bulk_resector_shikiho', 'ALL',
-            "四季報からセクター一括再抽出：更新{$resector_updated}件 / 抽出失敗{$resector_skipped}件"
+            "四季報からセクター一括再抽出：更新{$resector_updated}件 / 抽出失敗{$resector_skipped}件 / 対象外（手動・J-Quants優先）{$resector_protected}件"
             . (!empty($resector_samples) ? '　変更例：' . implode(', ', array_slice($resector_samples, 0, 10)) : '')
         );
-        echo '<div class="updated"><p>四季報からセクターを一括更新しました：更新' . $resector_updated . '件 / 抽出失敗' . $resector_skipped . '件</p></div>';
+        echo '<div class="updated"><p>四季報からセクターを一括更新しました：更新' . $resector_updated . '件 / 抽出失敗' . $resector_skipped . '件 / 対象外（手動・J-Quants優先）' . $resector_protected . '件</p></div>';
     }
     // ニュースRSS設定の保存
     if (isset($_POST['wp_stocks_save_news_rss'])) {
@@ -538,8 +546,8 @@ function wp_stocks_settings_page() {
     $shikiho_count = intval($wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}stocks WHERE shikiho IS NOT NULL AND shikiho != ''"));
     echo '<tr><th>セクター一括再抽出（四季報）</th><td>';
     echo '<p class="description">四季報情報が登録済みの全銘柄（' . number_format($shikiho_count) . '件）について、';
-    echo '四季報1行目の「［ ］」内の文字列からセクターを再抽出し、上書き更新します。<br>';
-    echo '英語セクターのまま残っている既存銘柄の一括修正に使用してください。</p>';
+    echo '四季報1行目の「［ ］」内の文字列からセクターを再抽出します（対象は手動指定・J-Quants33業種のどちらも無い銘柄のみ。それ以外はスキップされます）。<br>';
+    echo '英語セクターのまま残っている旧データの一括修正に使用してください。</p>';
     echo '<button type="submit" name="wp_stocks_bulk_resector_shikiho" class="button button-primary" onclick="return confirm(\'四季報登録済みの' . $shikiho_count . '件について、セクターを再抽出して上書きしますか？\');">四季報からセクターを一括再抽出</button>';
     echo '</td></tr>';
 

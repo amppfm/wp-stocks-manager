@@ -295,6 +295,10 @@ function wp_stocks_manager_create_tables() {
         'jquants_updated_at'               => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_updated_at DATETIME DEFAULT NULL AFTER jquants_market_name",
         'manual_forecast_eps'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_forecast_eps FLOAT DEFAULT 0 AFTER jquants_updated_at",
         'manual_next_fy_forecast_eps'      => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_next_fy_forecast_eps FLOAT DEFAULT 0 AFTER manual_forecast_eps",
+        // ★追加：J-Quantsで市場区分を判定できない銘柄（TOKYO PRO Market等）向けの手動指定
+        // 「market」列自体はJ-Quants由来の自動判定値と共用のため、J-Quants値がnullの場合のみ
+        // このmanual_market_nameがmarketへ反映される（wp_stocks_jquants_sync_stock()側で判定）
+        'manual_market_name'               => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_market_name VARCHAR(30) DEFAULT '' AFTER manual_next_fy_forecast_eps",
     ];
 
     foreach ($new_cols as $col => $sql) {

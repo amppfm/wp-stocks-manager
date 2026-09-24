@@ -173,7 +173,7 @@ function wp_stocks_jquants_sync_stock($stock_id, $code) {
         $update['jquants_market_name']   = $master['market_name'];
 
         $existing = $wpdb->get_row($wpdb->prepare(
-            "SELECT sector_override FROM {$wpdb->prefix}stocks WHERE id = %d", $stock_id
+            "SELECT sector_override, manual_market_name FROM {$wpdb->prefix}stocks WHERE id = %d", $stock_id
         ));
 
         // 業種：手動指定（sector_override）が無ければJ-Quantsの33業種名を実効sectorへ反映
@@ -182,11 +182,14 @@ function wp_stocks_jquants_sync_stock($stock_id, $code) {
             $update['sector'] = $master['sector33_name'];
         }
 
-        // 市場区分：J-Quantsで取得できた区分（プライム/スタンダード/グロース）のみ自動反映
-        // 取得できない区分（TOKYO PRO Market等）やnullの場合は既存の手入力値を保持
+        // 市場区分：J-Quantsで取得できた区分（プライム/スタンダード/グロース）を最優先で反映
+        // 取得できない区分（TOKYO PRO Market等）やnullの場合のみ、手動指定（manual_market_name）を
+        // フォールバックとして反映する。どちらも無ければ既存値を保持。
         $market_label = wp_stocks_jquants_market_code_to_label($master['market_code'] ?? null);
         if ($market_label !== null) {
             $update['market'] = $market_label;
+        } elseif ($existing && !empty($existing->manual_market_name)) {
+            $update['market'] = $existing->manual_market_name;
         }
     }
 

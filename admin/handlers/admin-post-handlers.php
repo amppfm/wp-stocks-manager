@@ -450,14 +450,24 @@ add_action('admin_post_update_screening_flags', function() {
     wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id . '&message=screening_saved'));
     exit;
 });
+// ★変更：J-Quantsが市場区分を判定できない銘柄（TOKYO PRO Market等）向けの手動指定用。
+// manual_market_nameへのみ書き込み、実効値のmarket列への反映はwp_stocks_jquants_sync_stock()側で
+// 「J-Quants値がnullの場合のみ」行う（cronによる自動上書きから分離するための設計）。
 add_action('admin_post_update_market_segment', function() {
     wp_stocks_require_admin_action('wp_stocks_market_segment_nonce');
     global $wpdb;
-    $id      = intval($_POST['stock_id']);
-    $segment = sanitize_text_field($_POST['market_segment']);
-    if (!in_array($segment, ['', 'プライム', 'スタンダード', 'グロース'], true)) $segment = '';
+    $id     = intval($_POST['stock_id']);
+    $manual = sanitize_text_field($_POST['manual_market_name'] ?? '');
     if ($id) {
-        $wpdb->update($wpdb->prefix . 'stocks', ['market' => $segment], ['id' => $id]);
+        $update = ['manual_market_name' => $manual];
+        // J-Quantsが市場区分を判定できていない銘柄なら、次回cronを待たずその場でmarketへも反映
+        $jquants_code = $wpdb->get_var($wpdb->prepare(
+            "SELECT jquants_market_code FROM {$wpdb->prefix}stocks WHERE id = %d", $id
+        ));
+        if (wp_stocks_jquants_market_code_to_label($jquants_code) === null) {
+            $update['market'] = $manual;
+        }
+        $wpdb->update($wpdb->prefix . 'stocks', $update, ['id' => $id]);
     }
     wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id . '&message=market_segment_saved'));
     exit;

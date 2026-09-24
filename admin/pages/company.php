@@ -176,17 +176,20 @@ function wp_stocks_company_page() {
     if (!$is_usd) {
         echo '<div style="margin-bottom:15px;">';
         echo '<h3>&#x1F3E2; 市場区分</h3>';
-        echo '<form method="post" action="' . admin_url('admin-post.php') . '">';
-        echo '<input type="hidden" name="action" value="update_market_segment">';
-        echo '<input type="hidden" name="stock_id" value="' . esc_attr($id) . '">';
-        wp_nonce_field('wp_stocks_market_segment_nonce');
-        echo '<select name="market_segment" style="margin-right:10px;">';
-        foreach (['' => '未設定', 'プライム' => 'プライム', 'スタンダード' => 'スタンダード', 'グロース' => 'グロース'] as $mval => $mlabel) {
-            $msel = ($stock->market ?? '') === $mval ? 'selected' : '';
-            echo '<option value="' . esc_attr($mval) . '" ' . $msel . '>' . esc_html($mlabel) . '</option>';
+        // ★変更：J-Quantsで判定できる銘柄（プライム/スタンダード/グロース）は自動反映のみとし、
+        // 手動入力フォームはJ-Quantsが判定できない銘柄（TOKYO PRO Market等）の場合のみ表示する
+        $jquants_market_label = wp_stocks_jquants_market_code_to_label($stock->jquants_market_code ?? null);
+        if ($jquants_market_label !== null) {
+            echo '<p class="description">J-Quantsにより自動判定されています（' . esc_html($jquants_market_label) . '）。</p>';
+        } else {
+            echo '<p class="description">J-Quantsで市場区分を判定できない銘柄です（TOKYO PRO Market等）。必要であれば手動で入力してください。</p>';
+            echo '<form method="post" action="' . admin_url('admin-post.php') . '">';
+            echo '<input type="hidden" name="action" value="update_market_segment">';
+            echo '<input type="hidden" name="stock_id" value="' . esc_attr($id) . '">';
+            wp_nonce_field('wp_stocks_market_segment_nonce');
+            echo '<input type="text" name="manual_market_name" value="' . esc_attr($stock->manual_market_name ?? '') . '" placeholder="例：TOKYO PRO Market" style="width:220px;margin-right:10px;">';
+            echo '<button type="submit" class="button button-primary">保存</button></form>';
         }
-        echo '</select>';
-        echo '<button type="submit" class="button button-primary">保存</button></form>';
         echo '</div>';
     }
 
