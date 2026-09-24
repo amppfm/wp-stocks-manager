@@ -100,18 +100,18 @@ function wp_stocks_settings_page() {
         echo '<div class="updated"><p>米国株 テクニカル計算完了：成功' . $ok . '件 / 失敗' . $ng . '件</p></div>';
     }
 
-    // 米国株 手動財務情報取得（FMP・四半期）
-    if (isset($_POST['wp_stocks_fetch_financials_fmp_us'])) {
+    // 米国株 手動 財務スコアカード・株価指標更新（企業情報＝wp_stocks_save_company_info）
+    if (isset($_POST['wp_stocks_refresh_company_info_us'])) {
         check_admin_referer('wp_stocks_settings_nonce');
         $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE currency = 'USD'");
         $ok = $ng = 0;
         foreach ($stocks as $s) {
-            $result = wp_stocks_fmp_save_quarterly_financials($s->id, $s->code);
+            $result = wp_stocks_save_company_info($s->id, $s->code);
             if ($result) $ok++; else $ng++;
             sleep(1);
         }
-        wp_stocks_log('info', 'manual_financials_fmp', 'US', "手動財務情報取得完了（FMP）：成功{$ok}件 / 失敗{$ng}件");
-        echo '<div class="updated"><p>米国株 財務情報取得完了（FMP）：成功' . $ok . '件 / 失敗' . $ng . '件</p></div>';
+        wp_stocks_log('info', 'manual_company_info_us', 'US', "手動 財務スコアカード・株価指標更新完了：成功{$ok}件 / 失敗{$ng}件");
+        echo '<div class="updated"><p>米国株 財務スコアカード・株価指標更新完了：成功' . $ok . '件 / 失敗' . $ng . '件</p></div>';
     }
 
     if (isset($_POST['wp_stocks_save_settings'])) {
@@ -498,14 +498,14 @@ function wp_stocks_settings_page() {
     echo '<p class="description" style="margin-top:8px;">6ヶ月分の日足データを取得してMA5/MA25/MA75/MACD/RSI/トレンドを計算します。銘柄間に1〜2秒のsleepを挟みます。</p>';
     echo '</td></tr>';
 
-    echo '<tr><th>手動財務情報取得（米国株・FMP）</th><td>';
+    echo '<tr><th>手動 財務スコアカード・株価指標更新（米国株・FMP）</th><td>';
     echo '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">';
-    echo '<button type="submit" name="wp_stocks_fetch_financials_fmp_us" class="button"'
+    echo '<button type="submit" name="wp_stocks_refresh_company_info_us" class="button"'
         . ' style="background:#27ae60;color:#fff;border-color:#1e8449;"'
-        . ' onclick="return confirm(\'米国株(' . $us_count . '銘柄)の四半期財務情報をFMPから今すぐ取得しますか？\\n完了まで数分かかります。\')">'
-        . '&#x1F1FA;&#x1F1F8; 米国株 財務情報取得（FMP・' . $us_count . '銘柄）</button>';
+        . ' onclick="return confirm(\'米国株(' . $us_count . '銘柄)の財務スコアカード・株価指標を今すぐ更新しますか？\\n完了まで数分かかります。\')">'
+        . '&#x1F1FA;&#x1F1F8; 米国株 財務スコアカード・株価指標更新（' . $us_count . '銘柄）</button>';
     echo '</div>';
-    echo '<p class="description" style="margin-top:8px;">FMPの四半期損益データ（売上高・純利益）をstock_quarterly_financialsテーブルにsource=\'fmp\'として保存します。既存のyahoo/edgarソースとは別レコードとして共存します。</p>';
+    echo '<p class="description" style="margin-top:8px;">企業情報ページ「基本情報」タブの財務スコアカード・株価指標（PER/PBR/ROE/自己資本比率など）を、FMP等のデータソースから一括更新します（個別更新と同じ wp_stocks_save_company_info を使用）。</p>';
     echo '</td></tr>';
 
     echo '</tbody></table>';

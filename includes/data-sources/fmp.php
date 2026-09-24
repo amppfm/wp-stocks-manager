@@ -15,9 +15,35 @@ function wp_stocks_fmp_api_key() {
     return get_option('wp_stocks_fmp_api_key', '');
 }
 
+// --------------------------------------------------
+// 無料プランの銘柄別アクセス制限（402 "not available under your current subscription"）
+// が判明した(endpoint, symbol)の組み合わせを記録し、再チェック期間が過ぎるまで
+// APIを叩かずスキップするための小さなブロックリスト（wp_optionsに保存）。
+// FMP側の許可リストは変動しうるため、$recheck_days経過後は自動的に再チェック対象に戻す。
+// --------------------------------------------------
+function wp_stocks_fmp_mark_symbol_blocked($endpoint, $symbol) {
+    $blocked = get_option('wp_stocks_fmp_blocked_symbols', array());
+    if (!is_array($blocked)) $blocked = array();
+    if (!isset($blocked[$endpoint]) || !is_array($blocked[$endpoint])) $blocked[$endpoint] = array();
+    $blocked[$endpoint][$symbol] = time();
+    update_option('wp_stocks_fmp_blocked_symbols', $blocked, false);
+}
+
+function wp_stocks_fmp_is_symbol_blocked($endpoint, $symbol, $recheck_days = 30) {
+    $blocked = get_option('wp_stocks_fmp_blocked_symbols', array());
+    if (!isset($blocked[$endpoint][$symbol])) return false;
+    if ((time() - intval($blocked[$endpoint][$symbol])) > $recheck_days * DAY_IN_SECONDS) return false;
+    return true;
+}
+
 function wp_stocks_fmp_fetch($endpoint, $params = array()) {
     $api_key = wp_stocks_fmp_api_key();
     if (empty($api_key)) return false;
+
+    $symbol = $params['symbol'] ?? '';
+    if ($symbol !== '' && wp_stocks_fmp_is_symbol_blocked($endpoint, $symbol)) {
+        return false;
+    }
 
     $params['apikey'] = $api_key;
     $url = 'https://financialmodelingprep.com/stable/' . $endpoint . '?' . http_build_query($params);
@@ -28,9 +54,18 @@ function wp_stocks_fmp_fetch($endpoint, $params = array()) {
         return false;
     }
     $code = wp_remote_retrieve_response_code($response);
-    $body = json_decode(wp_remote_retrieve_body($response), true);
+    $body_raw = wp_remote_retrieve_body($response);
+    $body = json_decode($body_raw, true);
+
+    // 無料プランの銘柄制限（402）はネットワーク障害等とは別扱いし、以後スキップ対象に登録する
+    if ($code === 402 && $symbol !== '' && strpos($body_raw, 'not available under your current subscription') !== false) {
+        wp_stocks_fmp_mark_symbol_blocked($endpoint, $symbol);
+        wp_stocks_log('error', 'fmp_fetch', $endpoint, '無料プランの銘柄制限のためスキップ対象に登録：' . $symbol);
+        return false;
+    }
+
     if ($code !== 200) {
-        wp_stocks_log('error', 'fmp_fetch', $endpoint, 'HTTPエラー：' . $code . ' / ' . wp_remote_retrieve_body($response));
+        wp_stocks_log('error', 'fmp_fetch', $endpoint, 'HTTPエラー：' . $code . ' / ' . $body_raw);
         return false;
     }
     if (is_array($body) && isset($body['Error Message'])) {
@@ -95,67 +130,4 @@ function wp_stocks_fmp_get_earnings_dates() {
 
     set_transient('wp_stocks_fmp_earnings_dates', $map, 12 * HOUR_IN_SECONDS);
     return $map;
-}
-
-// --------------------------------------------------
-// 米国株 四半期財務データ（FMP版）
-// 既存のyfinance版（wp_stocks_fetch_quarterly_financials, source='yahoo'）・
-// EDGAR版（wp_stocks_fetch_quarterly_financials_edgar, source='edgar'）とは
-// 別ソースとしてstock_quarterly_financialsテーブルに共存させる（source='fmp'）
-// --------------------------------------------------
-function wp_stocks_fmp_get_quarterly_financials($symbol, $limit = 8) {
-    $rows = wp_stocks_fmp_fetch('income-statement', array(
-        'symbol' => $symbol,
-        'period' => 'quarter',
-        'limit'  => $limit,
-    ));
-    if (!is_array($rows) || empty($rows)) return false;
-
-    $result = array();
-    foreach ($rows as $row) {
-        $period_end = $row['date'] ?? null;
-        if (!$period_end) continue;
-        $result[] = array(
-            'period_end'     => $period_end,
-            'revenue'        => isset($row['revenue'])   ? intval($row['revenue'])   : null,
-            'net_income'     => isset($row['netIncome']) ? intval($row['netIncome']) : null,
-            'fiscal_year'    => isset($row['fiscalYear']) ? intval($row['fiscalYear']) : null,
-            // FMPのperiod値は "Q1"〜"Q4" 形式（FYは通期のため対象外）
-            'fiscal_quarter' => isset($row['period']) && preg_match('/^Q([1-4])$/', $row['period'], $m) ? intval($m[1]) : null,
-        );
-    }
-    return $result;
-}
-
-function wp_stocks_fmp_save_quarterly_financials($stock_id, $symbol) {
-    global $wpdb;
-    $rows = wp_stocks_fmp_get_quarterly_financials($symbol);
-    if ($rows === false) {
-        wp_stocks_log('error', 'fetch_quarterly_fmp', $symbol, 'FMPから四半期データの取得に失敗しました');
-        return false;
-    }
-    $saved = 0;
-    foreach ($rows as $r) {
-        $existing = $wpdb->get_var($wpdb->prepare(
-            "SELECT id FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND period_end = %s AND source = 'fmp'",
-            $stock_id, $r['period_end']
-        ));
-        $data = array(
-            'stock_id'       => $stock_id,
-            'period_end'     => $r['period_end'],
-            'revenue'        => $r['revenue'],
-            'net_income'     => $r['net_income'],
-            'source'         => 'fmp',
-            'fiscal_year'    => $r['fiscal_year'],
-            'fiscal_quarter' => $r['fiscal_quarter'],
-        );
-        if ($existing) {
-            $wpdb->update($wpdb->prefix . 'stock_quarterly_financials', $data, array('id' => $existing));
-        } else {
-            $wpdb->insert($wpdb->prefix . 'stock_quarterly_financials', $data);
-        }
-        $saved++;
-    }
-    wp_stocks_log('info', 'fetch_quarterly_fmp', $symbol, $saved . '四半期分のデータを保存しました');
-    return $saved > 0;
 }
