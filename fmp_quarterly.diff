@@ -1,0 +1,69 @@
+--- verify3/includes/data-sources/fmp.php	2026-09-24 03:52:34.000000000 +0000
++++ apply_test/includes/data-sources/fmp.php	2026-09-24 11:38:07.188270259 +0000
+@@ -96,3 +96,66 @@
+     set_transient('wp_stocks_fmp_earnings_dates', $map, 12 * HOUR_IN_SECONDS);
+     return $map;
+ }
++
++// --------------------------------------------------
++// 米国株 四半期財務データ（FMP版）
++// 既存のyfinance版（wp_stocks_fetch_quarterly_financials, source='yahoo'）・
++// EDGAR版（wp_stocks_fetch_quarterly_financials_edgar, source='edgar'）とは
++// 別ソースとしてstock_quarterly_financialsテーブルに共存させる（source='fmp'）
++// --------------------------------------------------
++function wp_stocks_fmp_get_quarterly_financials($symbol, $limit = 8) {
++    $rows = wp_stocks_fmp_fetch('income-statement', array(
++        'symbol' => $symbol,
++        'period' => 'quarter',
++        'limit'  => $limit,
++    ));
++    if (!is_array($rows) || empty($rows)) return false;
++
++    $result = array();
++    foreach ($rows as $row) {
++        $period_end = $row['date'] ?? null;
++        if (!$period_end) continue;
++        $result[] = array(
++            'period_end'     => $period_end,
++            'revenue'        => isset($row['revenue'])   ? intval($row['revenue'])   : null,
++            'net_income'     => isset($row['netIncome']) ? intval($row['netIncome']) : null,
++            'fiscal_year'    => isset($row['fiscalYear']) ? intval($row['fiscalYear']) : null,
++            // FMPのperiod値は "Q1"〜"Q4" 形式（FYは通期のため対象外）
++            'fiscal_quarter' => isset($row['period']) && preg_match('/^Q([1-4])$/', $row['period'], $m) ? intval($m[1]) : null,
++        );
++    }
++    return $result;
++}
++
++function wp_stocks_fmp_save_quarterly_financials($stock_id, $symbol) {
++    global $wpdb;
++    $rows = wp_stocks_fmp_get_quarterly_financials($symbol);
++    if ($rows === false) {
++        wp_stocks_log('error', 'fetch_quarterly_fmp', $symbol, 'FMPから四半期データの取得に失敗しました');
++        return false;
++    }
++    $saved = 0;
++    foreach ($rows as $r) {
++        $existing = $wpdb->get_var($wpdb->prepare(
++            "SELECT id FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND period_end = %s AND source = 'fmp'",
++            $stock_id, $r['period_end']
++        ));
++        $data = array(
++            'stock_id'       => $stock_id,
++            'period_end'     => $r['period_end'],
++            'revenue'        => $r['revenue'],
++            'net_income'     => $r['net_income'],
++            'source'         => 'fmp',
++            'fiscal_year'    => $r['fiscal_year'],
++            'fiscal_quarter' => $r['fiscal_quarter'],
++        );
++        if ($existing) {
++            $wpdb->update($wpdb->prefix . 'stock_quarterly_financials', $data, array('id' => $existing));
++        } else {
++            $wpdb->insert($wpdb->prefix . 'stock_quarterly_financials', $data);
++        }
++        $saved++;
++    }
++    wp_stocks_log('info', 'fetch_quarterly_fmp', $symbol, $saved . '四半期分のデータを保存しました');
++    return $saved > 0;
++}

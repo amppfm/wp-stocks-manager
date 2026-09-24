@@ -830,10 +830,7 @@ add_action('admin_post_update_shikiho', function() {
         'shikiho'            => $shikiho,
         'shikiho_updated_at' => current_time('mysql'),
     ];
-    $sector_from_shikiho = wp_stocks_extract_sector_from_shikiho($shikiho);
-    if (!empty($sector_from_shikiho)) {
-        $update_data['sector'] = $sector_from_shikiho;
-    }
+    // 業種の自動判定はJ-Quants（equities/master）に一本化。四季報の[]内テキストからの抽出は廃止。
     $wpdb->update($wpdb->prefix . 'stocks', $update_data, ['id' => $id]);
     wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id . '&message=shikiho_saved'));
     exit;
