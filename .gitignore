@@ -2,3 +2,5 @@
 *.bak
 *.bak.*
 scripts/vendor/
+*.diff
+*.patch
