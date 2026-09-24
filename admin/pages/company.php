@@ -688,6 +688,7 @@ function wp_stocks_company_page() {
                 <button onclick="toggleMA()"  class="button button-small" id="btn_ma"  style="background:#0073aa;color:#fff;">MA</button>
                 <button onclick="toggleBB()"  class="button button-small" id="btn_bb"  style="background:#0073aa;color:#fff;">BB</button>
                 <button onclick="toggleIchimoku()" class="button button-small" id="btn_ichimoku" style="background:#0073aa;color:#fff;">一目</button>
+                <button onclick="toggleFib()" class="button button-small" id="btn_fib">フィボナッチ</button>
             </div>
             <div id="lwChart" style="width:100%;height:700px;"></div>
             <div id="lwChartHandle" style="width:100%;height:8px;background:#f0f0f0;cursor:ns-resize;display:flex;align-items:center;justify-content:center;border-top:1px solid #ddd;border-bottom:1px solid #ddd;margin:2px 0;">
@@ -1070,11 +1071,44 @@ function wp_stocks_company_page() {
             renderMain();
         }
 
+        var showFib = false;
+        function toggleFib() {
+            showFib = !showFib;
+            document.getElementById('btn_fib').style.background = showFib ? '#0073aa' : '';
+            document.getElementById('btn_fib').style.color      = showFib ? '#fff'    : '';
+            renderMain();
+        }
+
+        // フィボナッチ・リトレースメント計算
+        // 表示期間内（candleRaw全体）の高値・安値から標準的な水準を算出する。
+        // 安値→高値の順で出現していれば上昇トレンドの押し目水準として
+        // 高値=0%・安値=100%、逆（高値→安値の順）なら下降トレンドの
+        // 戻り水準として安値=0%・高値=100%で表示する。
+        function calcFibLevels(candles) {
+            if (!candles || candles.length < 2) return [];
+            var highIdx = 0, lowIdx = 0;
+            for (var i = 1; i < candles.length; i++) {
+                if (candles[i].high > candles[highIdx].high) highIdx = i;
+                if (candles[i].low  < candles[lowIdx].low)   lowIdx  = i;
+            }
+            var highVal = candles[highIdx].high;
+            var lowVal  = candles[lowIdx].low;
+            var range   = highVal - lowVal;
+            if (range <= 0) return [];
+            var uptrend = lowIdx <= highIdx; // 安値が先＝上昇トレンド中の押し目
+            var ratios  = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+            return ratios.map(function(r) {
+                var price = uptrend ? (highVal - range * r) : (lowVal + range * r);
+                return { ratio: r, price: Math.round(price * 100) / 100 };
+            });
+        }
+
         function renderMain() {
             if (mainChart) { mainChart.remove(); mainChart = null; }
             document.getElementById('lwChart').innerHTML = '';
             mainChart = LightweightCharts.createChart(document.getElementById('lwChart'), chartOpts);
 
+            var mainSeries = null;
             if (currentType === 'candlestick') {
                 var cs = mainChart.addCandlestickSeries({
                     upColor: '#e74c3c', downColor: '#3498db',
@@ -1082,9 +1116,11 @@ function wp_stocks_company_page() {
                     wickUpColor: '#e74c3c', wickDownColor: '#3498db',
                 });
                 cs.setData(candleRaw);
+                mainSeries = cs;
             } else {
                 var ls = mainChart.addLineSeries({ color: '#333', lineWidth: 2 });
                 ls.setData(lineRaw);
+                mainSeries = ls;
             }
 
             // MA線
@@ -1144,6 +1180,21 @@ function wp_stocks_company_page() {
                         senkouBLine.attachPrimitive(new IchimokuCloudPrimitive(ichimokuData.senkouA, ichimokuData.senkouB));
                     }
                 }
+            }
+
+            // フィボナッチ・リトレースメント（水平線）
+            if (showFib) {
+                var fibLevels = calcFibLevels(candleRaw);
+                fibLevels.forEach(function(lv) {
+                    mainSeries.createPriceLine({
+                        price: lv.price,
+                        color: '#f39c12',
+                        lineWidth: 1,
+                        lineStyle: 2,
+                        axisLabelVisible: true,
+                        title: (lv.ratio * 100).toFixed(1) + '%',
+                    });
+                });
             }
 
             mainChart.timeScale().fitContent();
