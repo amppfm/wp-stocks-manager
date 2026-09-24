@@ -4,3 +4,5 @@
 scripts/vendor/
 *.diff
 *.patch
+*.diff
+*_patch_b64.txt
