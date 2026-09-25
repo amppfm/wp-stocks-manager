@@ -104,22 +104,33 @@ function wp_stocks_jquants_get_fins_summary($code) {
 // -----------------------------------------------------------
 // 上場銘柄一覧（equities/master）取得：33業種・市場区分をコード側に切替
 // Freeプランでも利用可（fins/summaryと同じ「直近12週間データなし」の制約あり）
+//
+// ★2026-09-25 修正：Freeプランのレート制限は5コール/分と非常に厳しく、
+// 銘柄ごとに個別リクエスト（code指定）していると429が大量発生し実用にならなかった。
+// equities/masterはcode省略で「全銘柄情報一覧」を1回のリクエストで取得できる仕様のため、
+// 1回だけ全銘柄分を取得してcodeをキーにキャッシュし、以降は銘柄ごとにネットワーク呼び出しを
+// 行わない設計に変更（PHPプロセス内のstaticキャッシュ＝1回の同期実行内でのみ有効）。
 // -----------------------------------------------------------
-function wp_stocks_jquants_get_equities_master($code) {
+function wp_stocks_jquants_get_all_equities_master() {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $cache = [];
+
     $api_key = wp_stocks_jquants_get_api_key();
     if (empty($api_key)) {
-        wp_stocks_log('error', 'jquants_equities_master', $code, 'APIキー未設定');
-        return false;
+        wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'APIキー未設定');
+        return $cache;
     }
 
-    $url = 'https://api.jquants.com/v2/equities/master?code=' . urlencode($code);
-    $response = wp_remote_get($url, [
+    $url = 'https://api.jquants.com/v2/equities/master';
+    $args = [
         'headers' => ['x-api-key' => $api_key],
-        'timeout' => 15,
-    ]);
+        'timeout' => 30,
+    ];
+    $response = wp_remote_get($url, $args);
     if (is_wp_error($response)) {
-        wp_stocks_log('error', 'jquants_equities_master', $code, 'APIエラー: ' . $response->get_error_message());
-        return false;
+        wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'APIエラー: ' . $response->get_error_message());
+        return $cache;
     }
 
     $status   = wp_remote_retrieve_response_code($response);
@@ -127,46 +138,52 @@ function wp_stocks_jquants_get_equities_master($code) {
 
     // レート制限（429）の場合は少し待って1回だけ再試行する
     if ($status === 429) {
-        sleep(5);
-        $response = wp_remote_get($url, [
-            'headers' => ['x-api-key' => $api_key],
-            'timeout' => 15,
-        ]);
+        sleep(15);
+        $response = wp_remote_get($url, $args);
         if (is_wp_error($response)) {
-            wp_stocks_log('error', 'jquants_equities_master', $code, 'APIエラー（再試行後）: ' . $response->get_error_message());
-            return false;
+            wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'APIエラー（再試行後）: ' . $response->get_error_message());
+            return $cache;
         }
         $status   = wp_remote_retrieve_response_code($response);
         $raw_body = wp_remote_retrieve_body($response);
     }
 
     if ($status !== 200) {
-        wp_stocks_log('error', 'jquants_equities_master', $code, 'HTTPエラー: ' . $status . ' / ' . $raw_body);
-        return false;
+        wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'HTTPエラー: ' . $status . ' / ' . $raw_body);
+        return $cache;
     }
 
     $body    = json_decode($raw_body, true);
     $records = $body['data'] ?? [];
-    if (empty($records) || !is_array($records)) {
-        wp_stocks_log('error', 'jquants_equities_master', $code, 'レコードなし: ' . $raw_body);
-        return false;
+    if (!is_array($records)) {
+        wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'レコード形式不正: ' . $raw_body);
+        return $cache;
     }
 
-    // ★修正：code指定のみだと過去分を含む履歴が返り得るため、Dateで明示的に降順ソートしてから
-    // 最新1件を採用する（fins/summary側のDiscDate+DiscNoソートと同じ考え方）。
-    // ソートせず先頭をそのまま使うと、2022年の東証市場区分再編前の旧コード（東証一部=0101等）を
-    // 掴んでしまい、現行の市場区分コード（プライム=0111等）と一致せずmarketが空のままになる不具合があった。
-    usort($records, function($a, $b) {
-        return strcmp($b['Date'] ?? '', $a['Date'] ?? '');
-    });
-    $latest = $records[0];
+    foreach ($records as $rec) {
+        $c = $rec['Code'] ?? null;
+        if ($c === null || $c === '') continue;
+        $cache[$c] = [
+            'sector33_code' => $rec['S33']   ?? null,
+            'sector33_name' => $rec['S33Nm'] ?? null,
+            'market_code'   => $rec['Mkt']   ?? null,
+            'market_name'   => $rec['MktNm'] ?? null,
+        ];
+    }
+    wp_stocks_log('info', 'jquants_equities_master', 'ALL', '全銘柄一覧を一括取得：' . count($cache) . '件');
+    return $cache;
+}
 
-    return [
-        'sector33_code' => $latest['S33']   ?? null,
-        'sector33_name' => $latest['S33Nm'] ?? null,
-        'market_code'   => $latest['Mkt']   ?? null,
-        'market_name'   => $latest['MktNm'] ?? null,
-    ];
+function wp_stocks_jquants_get_equities_master($code) {
+    $all = wp_stocks_jquants_get_all_equities_master();
+    // 保存コードが4桁/5桁どちらの形式でも一致するようフォールバックして照合する
+    if (isset($all[$code])) return $all[$code];
+    if (isset($all[$code . '0'])) return $all[$code . '0'];
+    if (strlen($code) === 5 && substr($code, -1) === '0' && isset($all[substr($code, 0, 4)])) {
+        return $all[substr($code, 0, 4)];
+    }
+    wp_stocks_log('error', 'jquants_equities_master', $code, '一括取得結果に該当コードなし');
+    return false;
 }
 
 // 市場区分コード（Mkt）→ 画面表示用の区分名（既存の「プライム/スタンダード/グロース」表記に合わせる）
@@ -188,7 +205,8 @@ function wp_stocks_jquants_sync_stock($stock_id, $code) {
     global $wpdb;
 
     $data   = wp_stocks_jquants_get_fins_summary($code);
-    sleep(1); // 同一銘柄内でfins/summaryとequities/masterを連続で叩かないよう間隔を空ける（429対策）
+    // equities/masterは全銘柄一括取得＋キャッシュ方式に変更したため、ここでのネットワーク呼び出しは
+    // 通常発生しない（初回のみ1回）。よってfins/summaryとの間隔調整は不要になった。
     $master = wp_stocks_jquants_get_equities_master($code);
 
     if (!$data && !$master) {

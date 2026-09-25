@@ -103,12 +103,15 @@ function wp_stocks_settings_page() {
     // 日本株 手動 J-Quants同期（33業種・市場区分・予想EPS等）
     if (isset($_POST['wp_stocks_jquants_sync_manual'])) {
         check_admin_referer('wp_stocks_settings_nonce');
+        // equities/masterは初回1回だけ一括取得されるが、fins/summaryは銘柄ごとに呼ぶ必要があり、
+        // これがFreeプランのレート制限（5コール/分）の対象になる。安全のため13秒間隔にする
+        // （60秒のスライディングウィンドウで5コール未満に収めるための余裕を持った間隔）。
         $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE (currency = 'JPY' OR currency IS NULL OR currency = '')");
         $ok = $ng = 0;
         foreach ($stocks as $s) {
             $result = wp_stocks_jquants_sync_stock($s->id, $s->code);
             if ($result) $ok++; else $ng++;
-            sleep(3);
+            sleep(13);
         }
         wp_stocks_log('info', 'manual_jquants_sync', 'JP', "手動J-Quants同期完了：成功{$ok}件 / 失敗{$ng}件");
         echo '<div class="updated"><p>日本株 J-Quants同期完了：成功' . $ok . '件 / 失敗' . $ng . '件</p></div>';
@@ -516,10 +519,10 @@ function wp_stocks_settings_page() {
     echo '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">';
     echo '<button type="submit" name="wp_stocks_jquants_sync_manual" class="button"'
         . ' style="background:#2c3e50;color:#fff;border-color:#1a252f;"'
-        . ' onclick="return confirm(\'日本株(' . $jp_count . '銘柄)のJ-Quantsデータ（33業種・市場区分・予想EPS等）を今すぐ同期しますか？\\n完了まで数分かかります。\')">'
+        . ' onclick="return confirm(\'日本株(' . $jp_count . '銘柄)のJ-Quantsデータ（33業種・市場区分・予想EPS等）を今すぐ同期しますか？\\nFreeプランのレート制限（5コール/分）に合わせて銘柄あたり13秒かかるため、完了まで1時間前後かかります。\')">'
         . '&#x1F1EF;&#x1F1F5; J-Quantsを今すぐ同期（' . $jp_count . '銘柄）</button>';
     echo '</div>';
-    echo '<p class="description" style="margin-top:8px;">通常は日曜22:00の企業情報週次Cronの一部として自動実行されます。設定変更後の動作確認など、次回Cronを待たずに反映したい場合にご利用ください。銘柄間に3秒のsleepを挟みます（J-Quantsのレート制限対策）。</p>';
+    echo '<p class="description" style="margin-top:8px;">通常は日曜22:00の企業情報週次Cronの一部として自動実行されます。設定変更後の動作確認など、次回Cronを待たずに反映したい場合にご利用ください。J-Quants Freeプランのレート制限（5コール/分）に合わせて銘柄間に13秒のsleepを挟みます（33業種・市場区分は初回に全銘柄分を一括取得するため、実際にレート制限の対象になるのは予想EPS等のfins/summary呼び出しのみです）。</p>';
     echo '</td></tr>';
 
     echo '<tr><th>手動 財務スコアカード・株価指標更新（米国株・FMP）</th><td>';
