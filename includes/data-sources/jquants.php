@@ -29,6 +29,22 @@ function wp_stocks_jquants_get_fins_summary($code) {
 
     $status = wp_remote_retrieve_response_code($response);
     $raw_body = wp_remote_retrieve_body($response);
+
+    // レート制限（429）の場合は少し待って1回だけ再試行する
+    if ($status === 429) {
+        sleep(5);
+        $response = wp_remote_get($url, [
+            'headers' => ['x-api-key' => $api_key],
+            'timeout' => 15,
+        ]);
+        if (is_wp_error($response)) {
+            wp_stocks_log('error', 'jquants_fins_summary', $code, 'APIエラー（再試行後）: ' . $response->get_error_message());
+            return false;
+        }
+        $status = wp_remote_retrieve_response_code($response);
+        $raw_body = wp_remote_retrieve_body($response);
+    }
+
     if ($status !== 200) {
         wp_stocks_log('error', 'jquants_fins_summary', $code, 'HTTPエラー: ' . $status . ' / ' . $raw_body);
         return false;
@@ -108,6 +124,22 @@ function wp_stocks_jquants_get_equities_master($code) {
 
     $status   = wp_remote_retrieve_response_code($response);
     $raw_body = wp_remote_retrieve_body($response);
+
+    // レート制限（429）の場合は少し待って1回だけ再試行する
+    if ($status === 429) {
+        sleep(5);
+        $response = wp_remote_get($url, [
+            'headers' => ['x-api-key' => $api_key],
+            'timeout' => 15,
+        ]);
+        if (is_wp_error($response)) {
+            wp_stocks_log('error', 'jquants_equities_master', $code, 'APIエラー（再試行後）: ' . $response->get_error_message());
+            return false;
+        }
+        $status   = wp_remote_retrieve_response_code($response);
+        $raw_body = wp_remote_retrieve_body($response);
+    }
+
     if ($status !== 200) {
         wp_stocks_log('error', 'jquants_equities_master', $code, 'HTTPエラー: ' . $status . ' / ' . $raw_body);
         return false;
@@ -148,6 +180,7 @@ function wp_stocks_jquants_sync_stock($stock_id, $code) {
     global $wpdb;
 
     $data   = wp_stocks_jquants_get_fins_summary($code);
+    sleep(1); // 同一銘柄内でfins/summaryとequities/masterを連続で叩かないよう間隔を空ける（429対策）
     $master = wp_stocks_jquants_get_equities_master($code);
 
     if (!$data && !$master) {
