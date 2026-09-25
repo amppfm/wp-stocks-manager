@@ -686,9 +686,10 @@ function wp_stocks_company_page() {
                 <button onclick="setSubChart('dmi')"    class="button button-small" id="btn_dmi">DMI</button>
                 <span style="font-size:13px;color:#888;margin-left:10px;">表示：</span>
                 <button onclick="toggleMA()"  class="button button-small" id="btn_ma"  style="background:#0073aa;color:#fff;">MA</button>
-                <button onclick="toggleBB()"  class="button button-small" id="btn_bb"  style="background:#0073aa;color:#fff;">BB</button>
-                <button onclick="toggleIchimoku()" class="button button-small" id="btn_ichimoku" style="background:#0073aa;color:#fff;">一目</button>
+                <button onclick="toggleBB()"  class="button button-small" id="btn_bb">BB</button>
+                <button onclick="toggleIchimoku()" class="button button-small" id="btn_ichimoku">一目</button>
                 <button onclick="toggleFib()" class="button button-small" id="btn_fib">フィボナッチ</button>
+                <button onclick="toggleSAR()" class="button button-small" id="btn_sar">パラボリック</button>
             </div>
             <div id="lwChart" style="width:100%;height:700px;"></div>
             <div id="lwChartHandle" style="width:100%;height:8px;background:#f0f0f0;cursor:ns-resize;display:flex;align-items:center;justify-content:center;border-top:1px solid #ddd;border-bottom:1px solid #ddd;margin:2px 0;">
@@ -1047,7 +1048,7 @@ function wp_stocks_company_page() {
         }
 
         var showMA = true;
-        var showBB = true;
+        var showBB = false;
 
         function toggleMA() {
             showMA = !showMA;
@@ -1058,16 +1059,16 @@ function wp_stocks_company_page() {
 
         function toggleBB() {
             showBB = !showBB;
-            document.getElementById('btn_bb').style.background = showBB ? '#0073aa' : '#ccc';
-            document.getElementById('btn_bb').style.color      = showBB ? '#fff'    : '#333';
+            document.getElementById('btn_bb').style.background = showBB ? '#0073aa' : '';
+            document.getElementById('btn_bb').style.color      = showBB ? '#fff'    : '';
             renderMain();
         }
 
-        var showIchimoku = true;
+        var showIchimoku = false;
         function toggleIchimoku() {
             showIchimoku = !showIchimoku;
-            document.getElementById('btn_ichimoku').style.background = showIchimoku ? '#0073aa' : '#ccc';
-            document.getElementById('btn_ichimoku').style.color      = showIchimoku ? '#fff'    : '#333';
+            document.getElementById('btn_ichimoku').style.background = showIchimoku ? '#0073aa' : '';
+            document.getElementById('btn_ichimoku').style.color      = showIchimoku ? '#fff'    : '';
             renderMain();
         }
 
@@ -1101,6 +1102,62 @@ function wp_stocks_company_page() {
                 var price = uptrend ? (highVal - range * r) : (lowVal + range * r);
                 return { ratio: r, price: Math.round(price * 100) / 100 };
             });
+        }
+
+        var showSAR = false;
+        function toggleSAR() {
+            showSAR = !showSAR;
+            document.getElementById('btn_sar').style.background = showSAR ? '#0073aa' : '';
+            document.getElementById('btn_sar').style.color      = showSAR ? '#fff'    : '';
+            renderMain();
+        }
+
+        // パラボリックSAR計算（標準的なWilder式、AF初期値0.02・刻み0.02・上限0.2）
+        function calcSAR(candles, step, maxStep) {
+            step = step || 0.02;
+            maxStep = maxStep || 0.2;
+            var result = [];
+            if (!candles || candles.length < 2) return result;
+
+            var uptrend = candles[1].close >= candles[0].close;
+            var af  = step;
+            var ep  = uptrend ? candles[0].high : candles[0].low;
+            var sar = uptrend ? candles[0].low  : candles[0].high;
+            result.push({ time: candles[0].time, value: Math.round(sar * 100) / 100 });
+
+            for (var i = 1; i < candles.length; i++) {
+                var prevSar = sar;
+                sar = prevSar + af * (ep - prevSar);
+
+                var prev1 = candles[i - 1];
+                var prev2 = candles[i - 2] || prev1;
+
+                if (uptrend) {
+                    sar = Math.min(sar, prev1.low, prev2.low);
+                    if (candles[i].low < sar) {
+                        uptrend = false;
+                        sar = ep;
+                        ep  = candles[i].low;
+                        af  = step;
+                    } else if (candles[i].high > ep) {
+                        ep = candles[i].high;
+                        af = Math.min(af + step, maxStep);
+                    }
+                } else {
+                    sar = Math.max(sar, prev1.high, prev2.high);
+                    if (candles[i].high > sar) {
+                        uptrend = true;
+                        sar = ep;
+                        ep  = candles[i].high;
+                        af  = step;
+                    } else if (candles[i].low < ep) {
+                        ep = candles[i].low;
+                        af = Math.min(af + step, maxStep);
+                    }
+                }
+                result.push({ time: candles[i].time, value: Math.round(sar * 100) / 100 });
+            }
+            return result;
         }
 
         function renderMain() {
@@ -1179,6 +1236,23 @@ function wp_stocks_company_page() {
                     if (typeof senkouBLine.attachPrimitive === 'function') {
                         senkouBLine.attachPrimitive(new IchimokuCloudPrimitive(ichimokuData.senkouA, ichimokuData.senkouB));
                     }
+                }
+            }
+
+            // パラボリックSAR（ドット表示）
+            if (showSAR) {
+                var sarData = calcSAR(candleRaw);
+                if (sarData.length > 0) {
+                    var sarSeries = mainChart.addLineSeries({
+                        color: '#8e44ad',
+                        lineVisible: false,
+                        pointMarkersVisible: true,
+                        pointMarkersRadius: 2,
+                        lastValueVisible: false,
+                        priceLineVisible: false,
+                        title: 'SAR',
+                    });
+                    sarSeries.setData(sarData);
                 }
             }
 
