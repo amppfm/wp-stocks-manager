@@ -190,8 +190,12 @@ add_action('wp_stocks_company_cron', function() {
             if ($edgar_result) $edgar_ok++; else $edgar_ng++;
         } else {
             // 日本株はついでにJ-Quantsの予想EPS等も週次で取得する
-            $jquants_result = wp_stocks_jquants_sync_stock($s->id, $s->code);
-            if ($jquants_result) $jquants_ok++; else $jquants_ng++;
+            // ※TOPIX-17指数連動ETF（1617〜1633等）は実在企業ではないためfins/summary等が
+            //   常に空振りする。無駄なAPI呼び出しとエラーログを避けるため対象外とする。
+            if (($s->sector ?? '') !== 'TOPIX-17') {
+                $jquants_result = wp_stocks_jquants_sync_stock($s->id, $s->code);
+                if ($jquants_result) $jquants_ok++; else $jquants_ng++;
+            }
         }
 
         // 負荷対策：3件ごとに5秒sleep、それ以外は2秒

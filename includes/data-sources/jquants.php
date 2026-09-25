@@ -83,11 +83,12 @@ function wp_stocks_jquants_get_fins_summary($code) {
         return ($v === '' || $v === null) ? null : floatval($v);
     };
 
-	// FEPSが空欄（期末直後で当期予想が確定値に置き換わった状態）の場合、実績EPSにフォールバック
+    // ★2026-09-25変更：以前はFEPSが空の場合に実績EPSへフォールバックしていたが、
+    // これだと「予想が未発表なだけ」なのか「実績が予想として返ってきている」のか区別が
+    // つかず紛らわしい。forecast_epsは素直にFEPSのみを返す（フォールバックなし・null許容）。
+    // 実績EPSが欲しい場面はepsキーで既に取得できるので、機能が失われるわけではない。
+    // UI側で「予想未発表のため実績EPS表示中」等、明示的にラベルを分けて表示する。
     $forecast_eps = $clean($latest['FEPS'] ?? null);
-    if ($forecast_eps === null) {
-        $forecast_eps = $clean($latest['EPS'] ?? null);
-    }
 
     return [
         'eps'                      => $clean($latest['EPS'] ?? null),
@@ -223,6 +224,7 @@ function wp_stocks_jquants_sync_stock($stock_id, $code) {
         $update['jquants_equity_ratio']              = $data['equity_ratio'];
         $update['jquants_roe']                       = $data['roe'];
         $update['jquants_forecast_dividend_annual']  = $data['forecast_dividend_annual'];
+        $update['jquants_disc_date']                 = $data['disc_date'];
     }
 
     if ($master) {

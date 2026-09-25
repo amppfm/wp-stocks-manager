@@ -286,7 +286,11 @@ function wp_stocks_manager_create_tables() {
         'jquants_equity_ratio'             => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_equity_ratio FLOAT DEFAULT NULL AFTER jquants_bps",
         'jquants_roe'                      => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_roe FLOAT DEFAULT NULL AFTER jquants_equity_ratio",
         'jquants_forecast_dividend_annual' => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_forecast_dividend_annual FLOAT DEFAULT NULL AFTER jquants_roe",
-        'jquants_industry_ja'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_industry_ja VARCHAR(100) DEFAULT '' AFTER jquants_forecast_dividend_annual",
+        // ★追加：予想EPS等の元になった実際の開示日（DiscDate）。jquants_updated_at（同期実行日時）とは
+        // 別物で、Freeプランの「直近12週間データなし」制約により両者は乖離し得るため、
+        // 値の信頼性（どれだけ古い開示に基づくか）を判断できるよう別カラムで保持する。
+        'jquants_disc_date'                => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_disc_date DATE DEFAULT NULL AFTER jquants_forecast_dividend_annual",
+        'jquants_industry_ja'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_industry_ja VARCHAR(100) DEFAULT '' AFTER jquants_disc_date",
         // ★追加：J-Quants equities/master（上場銘柄一覧）由来の33業種・市場区分
         'jquants_sector33_code'            => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_sector33_code VARCHAR(10) DEFAULT '' AFTER jquants_industry_ja",
         'jquants_sector33_name'            => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN jquants_sector33_name VARCHAR(100) DEFAULT '' AFTER jquants_sector33_code",

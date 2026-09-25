@@ -2157,8 +2157,17 @@ function wp_stocks_company_page() {
     // 予想EPS手動入力（日本株のみ。J-Quantsは無料プランのため最大12週遅延、決算直後の即時反映用）
     if (!$is_usd) {
         echo '<h3 style="margin-top:25px;">&#x270F;&#xFE0F; 予想EPS手動入力（J-Quants上書き）</h3>';
-        $jq_updated = !empty($stock->jquants_updated_at) ? esc_html($stock->jquants_updated_at) : '未取得';
-        echo '<p style="color:#666;font-size:13px;">J-Quants自動取得値（当期予想: ' . esc_html($stock->jquants_forecast_eps ?? 'N/A') . '円 / 来期予想: ' . esc_html($stock->jquants_next_fy_forecast_eps ?? 'N/A') . '円、取得日時: ' . $jq_updated . '）。決算直後などJ-Quantsの反映（最大12週遅延）を待てない場合は、下記に手動値を入力すると自動取得より優先されます。空欄に戻すとJ-Quants値に戻ります。</p>';
+        $jq_updated   = !empty($stock->jquants_updated_at) ? esc_html($stock->jquants_updated_at) : '未取得';
+        $jq_disc_date = !empty($stock->jquants_disc_date) ? esc_html($stock->jquants_disc_date) : '不明';
+        // ★2026-09-25変更：以前はforecast_epsが空のとき実績EPSを予想扱いで代入していたが紛らわしいため廃止。
+        // 予想が未発表の場合はforecast_epsがnullのまま返るので、その場合は実績EPS（jquants_eps）を
+        // 「参考値」として明示的にラベルを分けて表示する（優先度：manual > jquants予想 > なし）。
+        $forecast_line = !empty($stock->jquants_forecast_eps)
+            ? esc_html($stock->jquants_forecast_eps) . '円'
+            : 'N/A（未発表' . (!empty($stock->jquants_eps) ? '。参考=直近実績EPS ' . esc_html($stock->jquants_eps) . '円' : '') . '）';
+        echo '<p style="color:#666;font-size:13px;">J-Quants自動取得値（当期予想: ' . $forecast_line . ' / 来期予想: ' . esc_html($stock->jquants_next_fy_forecast_eps ?? 'N/A') . '円）。<br>';
+        echo '開示日（この予想値のもとになった決算開示日）: ' . $jq_disc_date . '　/　同期実行日時: ' . $jq_updated . '。開示日が古い場合は内容が最新でない可能性があるのでご注意ください。<br>';
+        echo '決算直後などJ-Quantsの反映（最大12週遅延）を待てない場合は、下記に手動値を入力すると自動取得より優先されます。空欄に戻すとJ-Quants値に戻ります。</p>';
         echo '<form method="post" action="' . admin_url('admin-post.php') . '">';
         echo '<input type="hidden" name="action" value="update_manual_forecast_eps">';
         echo '<input type="hidden" name="stock_id" value="' . esc_attr($id) . '">';
