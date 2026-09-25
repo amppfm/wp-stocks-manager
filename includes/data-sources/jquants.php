@@ -151,6 +151,14 @@ function wp_stocks_jquants_get_equities_master($code) {
         wp_stocks_log('error', 'jquants_equities_master', $code, 'レコードなし: ' . $raw_body);
         return false;
     }
+
+    // ★修正：code指定のみだと過去分を含む履歴が返り得るため、Dateで明示的に降順ソートしてから
+    // 最新1件を採用する（fins/summary側のDiscDate+DiscNoソートと同じ考え方）。
+    // ソートせず先頭をそのまま使うと、2022年の東証市場区分再編前の旧コード（東証一部=0101等）を
+    // 掴んでしまい、現行の市場区分コード（プライム=0111等）と一致せずmarketが空のままになる不具合があった。
+    usort($records, function($a, $b) {
+        return strcmp($b['Date'] ?? '', $a['Date'] ?? '');
+    });
     $latest = $records[0];
 
     return [

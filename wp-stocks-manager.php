@@ -2,7 +2,7 @@
 /*
 Plugin Name: WP Stocks Manager
 Description: 銘柄管理・株価取得・企業情報・ニュース・株価履歴・祝日スキップ・ダッシュボード・ポートフォリオ・財務スコアカード・決算カレンダー・テクニカル指標・銘柄比較・AI分析履歴・銘柄メモ・インポート/エクスポート・ログ
-Version: 3.2
+Version: 5.0
 */
 
 if (!defined('ABSPATH')) exit;
@@ -16,7 +16,7 @@ if (!get_option('wp_stocks_temp_opcache_reset_done')) {
     update_option('wp_stocks_temp_opcache_reset_done', 1);
 }
 
-define('WP_STOCKS_VERSION', '4.9');
+define('WP_STOCKS_VERSION', '5.0');
 define('WP_STOCKS_LOG_DAYS', 30);
 
 // --------------------------------------------------
