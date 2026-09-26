@@ -174,6 +174,12 @@ function wp_stocks_jquants_save_quarterly_financials($stock_id, $records) {
 
     $saved = 0;
     foreach ($quarters as $q) {
+        // ★2026-09-26修正：「業績予想の修正」（EarnForecastRevision）は同じCurPerType/period_endで
+        // 別レコードとして存在するが、実績値（Sales/OP/OdP/NP/EPS等）は全て空欄。
+        // 日付降順ソートの都合でこちらが決算短信本体より後に処理されると、既に保存済みの
+        // 正しい実績値を空欄で上書きしてしまうため、実績値が全く無いレコードは保存自体をスキップする。
+        if ($q['revenue'] === null && $q['net_income'] === null) continue;
+
         $existing = $wpdb->get_var($wpdb->prepare(
             "SELECT id FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND period_end = %s AND source = 'jquants'",
             $stock_id, $q['period_end']
