@@ -106,9 +106,15 @@ function wp_stocks_settings_page() {
         // equities/masterは初回1回だけ一括取得されるが、fins/summaryは銘柄ごとに呼ぶ必要があり、
         // これがFreeプランのレート制限（5コール/分）の対象になる。安全のため13秒間隔にする
         // （60秒のスライディングウィンドウで5コール未満に収めるための余裕を持った間隔）。
-        // TOPIX-17指数連動ETF（1617〜1633等）は実在企業ではないためfins/summary等が常に
-        // 空振りする。無駄なAPI呼び出し（13秒×該当件数）とエラーログを避けるため対象外とする。
-        $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE (currency = 'JPY' OR currency IS NULL OR currency = '') AND (sector IS NULL OR sector != 'TOPIX-17')");
+        // TOPIX-17指数連動ETF（1617〜1633）は実在企業ではないためfins/summary等が常に空振りする。
+        // ★2026-09-26修正：sector列は他の処理（JPX業種別PER関連）で後から書き換わり得て
+        // 不安定なため、判定はwp_stocks_get_topix17_sector_map()の固定コード一覧を使う。
+        $topix17_codes = array_keys(wp_stocks_get_topix17_sector_map());
+        $placeholders  = implode(',', array_fill(0, count($topix17_codes), '%s'));
+        $stocks = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}stocks WHERE (currency = 'JPY' OR currency IS NULL OR currency = '') AND code NOT IN ($placeholders)",
+            $topix17_codes
+        ));
         $ok = $ng = 0;
         foreach ($stocks as $s) {
             $result = wp_stocks_jquants_sync_stock($s->id, $s->code);
