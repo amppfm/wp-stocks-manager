@@ -682,7 +682,11 @@ function wp_stocks_settings_page() {
         if (btn) {
             btn.addEventListener("click", function(){
                 var code = document.getElementById("wp_stocks_jquants_test_code").value || "86970";
-                var base = ' . json_encode(wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_jquants_test_fetch'), 'wp_stocks_jquants_test')) . ';
+                var base = ' . json_encode(html_entity_decode(wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_jquants_test_fetch'), 'wp_stocks_jquants_test'))) . ';
+                // ★2026-09-26修正：wp_nonce_url()はデフォルトでHTMLエスケープ済み（&→&amp;）の文字列を
+                // 返すため、<a href>ではなくJS文字列として埋め込む場合はhtml_entity_decode()で
+                // 戻さないと_wpnonceパラメータ名が壊れてnonce検証に失敗する（他のEDGAR/FMPリンクは
+                // <a href>形式で出力しているためこの問題が起きない）。
                 window.open(base + "&code=" + encodeURIComponent(code), "_blank");
             });
         }
