@@ -161,6 +161,7 @@ function wp_stocks_jquants_extract_quarterly($records) {
             'cf_investing'      => $clean_int($r['CFI'] ?? null),
             'cf_financing'      => $clean_int($r['CFF'] ?? null),
             'cash_equivalents'  => $clean_int($r['CashEq'] ?? null),
+            'equity_ratio'      => $clean_float($r['EqAR'] ?? null),
         ];
     }
     return $result;

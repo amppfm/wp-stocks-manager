@@ -144,23 +144,9 @@ function wp_stocks_manager_create_tables() {
         INDEX(analysis_date)
     ) $charset;";
 
-    $sql_fin = "CREATE TABLE IF NOT EXISTS {$wpdb->prefix}stock_financials (
-        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        stock_id BIGINT UNSIGNED NOT NULL,
-        fiscal_year VARCHAR(10) NOT NULL,
-        period_label VARCHAR(20) DEFAULT '',
-        revenue BIGINT DEFAULT NULL,
-        operating_profit BIGINT DEFAULT NULL,
-        net_income BIGINT DEFAULT NULL,
-        equity BIGINT DEFAULT NULL,
-        total_assets BIGINT DEFAULT NULL,
-        equity_ratio FLOAT DEFAULT NULL,
-        eps FLOAT DEFAULT NULL,
-        dividend FLOAT DEFAULT NULL,
-        doc_id VARCHAR(20) DEFAULT '',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY stock_year (stock_id, fiscal_year)
-    ) $charset;";
+    // ★2026-09-26廃止：stock_financials（EDINET年間データ）は
+    // J-Quantsのstock_quarterly_financials（fiscal_quarter=4=通期）に一本化したため削除。
+    // 過去のCREATE TABLE定義はここにあった。
     // NOTE: 以前は未定義変数 $charset_collate を使用し、かつ dbDelta() が
     // require_once(...upgrade.php) の前に呼ばれていたため、環境によっては
     // 致命的エラーやcharset未反映の原因になっていた。下のdbDelta一括呼び出しに統合する。
@@ -244,7 +230,10 @@ function wp_stocks_manager_create_tables() {
 
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
 //    dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4); dbDelta($sql5); dbDelta($sql6); dbDelta($sql_fin); dbDelta($sql7); dbDelta($sql8); dbDelta($sql9); dbDelta($sql10); dbDelta($sql_signal_history); dbDelta($sql_jpx_sector_per);
-    dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4); dbDelta($sql5); dbDelta($sql6); dbDelta($sql_fin); dbDelta($sql7); dbDelta($sql8); dbDelta($sql9); dbDelta($sql10); dbDelta($sql_signal_history); dbDelta($sql_jpx_sector_per); dbDelta($sql_valuation_history);
+    dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4); dbDelta($sql5); dbDelta($sql6); dbDelta($sql7); dbDelta($sql8); dbDelta($sql9); dbDelta($sql10); dbDelta($sql_signal_history); dbDelta($sql_jpx_sector_per); dbDelta($sql_valuation_history);
+
+    // ★2026-09-26廃止：EDINET由来の年間財務データテーブルを削除（J-Quants四半期データに一本化）
+    $wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}stock_financials");
 	
 	// dbDelta()は "CREATE TABLE IF NOT EXISTS" の書き方だとテーブル名の抽出に失敗し
     // （正規表現が最初の1単語である"IF"をテーブル名と誤認識する既知の不具合）、
@@ -278,6 +267,11 @@ function wp_stocks_manager_create_tables() {
     }
     if (!in_array('cash_equivalents', $wsm_qf_columns, true)) {
         $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN cash_equivalents BIGINT DEFAULT NULL AFTER cf_financing");
+    }
+    // ★2026-09-26追加：「年間」セクションをEDINETからJ-Quants（fiscal_quarter=4=通期）に
+    // 置き換えるために自己資本比率も四半期ごとに保存する
+    if (!in_array('equity_ratio', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN equity_ratio FLOAT DEFAULT NULL AFTER cash_equivalents");
     }
 
     // 既存テーブルへのカラム追加

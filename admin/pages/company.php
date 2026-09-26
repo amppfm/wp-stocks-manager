@@ -1479,21 +1479,25 @@ function wp_stocks_company_page() {
     if (!$is_usd) {
         $shikiho_url = 'https://shikiho.toyokeizai.net/stocks/' . rawurlencode($stock->code) . '/forecast';
         echo '<p style="margin-bottom:20px;"><a href="' . esc_url($shikiho_url) . '" target="_blank" rel="noopener" class="button button-primary">&#x1F4D6; 四季報オンラインで財務情報を見る</a></p>';
+
+        // 年間・四半期を1回でまとめて更新するボタン（fins/summaryは1回の取得で全期間分返るため共通化）
+        $jq_combined_url = wp_nonce_url(admin_url('admin-post.php?action=fetch_quarterly_financials_jquants&stock_id=' . $id), 'wp_stocks_fetch_qfin_jquants_' . $id);
+        echo '<p style="margin-bottom:20px;"><a href="' . esc_url($jq_combined_url) . '" class="button">&#x1F504; J-Quantsから年間・四半期データをまとめて取得</a></p>';
     }
 
     echo '<h2 style="border-left:4px solid #0073aa;padding-left:10px;">年間</h2>';
 
     if (!$is_usd) {
+    // ★2026-09-26変更：EDINET由来のstock_financialsから、J-Quantsのstock_quarterly_financials
+    // （fiscal_quarter=4=「通期」レコード）に置き換え。上の統合ボタンで四半期と同時に更新される。
     $financials = $wpdb->get_results($wpdb->prepare(
-        "SELECT * FROM {$wpdb->prefix}stock_financials WHERE stock_id = %d ORDER BY fiscal_year ASC", $id
+        "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source = 'jquants' AND fiscal_quarter = 4 ORDER BY fiscal_year ASC", $id
     ));
 
     if (empty($financials)) {
         echo '<div style="background:#f8f9fa;border:1px solid #ddd;border-radius:8px;padding:30px;text-align:center;color:#888;margin-bottom:20px;">';
         echo '<p style="font-size:16px;font-weight:bold;margin-bottom:10px;">&#x1F4B0; 財務データがまだ取得されていません</p>';
-        echo '<p style="font-size:13px;">設定ページから「財務データ取得」を実行するか、下のボタンで取得してください。</p>';
-        $fin_url = wp_nonce_url(admin_url('admin-post.php?action=fetch_financials&stock_id=' . $id . '&from=finance'), 'wp_stocks_fetch_fin_' . $id);
-        echo '<p style="margin-top:15px;"><a href="' . esc_url($fin_url) . '" class="button button-primary">&#x1F4CA; EDINETから財務データを取得</a></p>';
+        echo '<p style="font-size:13px;">上部の「J-Quantsから年間・四半期データをまとめて取得」ボタンを実行するか、次回の週次Cronをお待ちください。</p>';
         echo '</div>';
     } else {
         // グラフ用データ準備
@@ -1504,7 +1508,7 @@ function wp_stocks_company_page() {
         $fin_eq_ratio = [];
         $fin_op_margin = [];
         foreach ($financials as $f) {
-            $fin_labels[]    = esc_js($f->period_label ?: $f->fiscal_year);
+            $fin_labels[]    = esc_js($f->fiscal_year . '年度');
             $fin_revenue[]   = $f->revenue     ? round($f->revenue / 1000000)     : 0;
             $fin_op_profit[] = $f->operating_profit ? round($f->operating_profit / 1000000) : 0;
             $fin_net_income[] = $f->net_income  ? round($f->net_income / 1000000)  : 0;
@@ -1533,9 +1537,7 @@ function wp_stocks_company_page() {
         $fin_amount_max_json = json_encode($fin_amount_max);
         $fin_amount_min_json = json_encode($fin_amount_min);
 
-        // 財務データ取得ボタン
-        $fin_url = wp_nonce_url(admin_url('admin-post.php?action=fetch_financials&stock_id=' . $id . '&from=finance'), 'wp_stocks_fetch_fin_' . $id);
-        echo '<p style="text-align:right;margin-bottom:15px;"><a href="' . esc_url($fin_url) . '" class="button">&#x1F504; EDINETから財務データを再取得</a></p>';
+        // 財務データの再取得は上部の統合ボタン（年間・四半期まとめて取得）を使用
 
         ?>
         <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
@@ -1565,7 +1567,7 @@ function wp_stocks_company_page() {
                 <tbody>
                 <?php foreach ($financials as $f): ?>
                 <tr>
-                    <td><?php echo esc_html($f->period_label ?: $f->fiscal_year); ?></td>
+                    <td><?php echo esc_html($f->fiscal_year . '年度'); ?></td>
                     <td><?php echo $f->revenue ? number_format($f->revenue / 1000000) : '-'; ?></td>
                     <td><?php echo $f->operating_profit ? number_format($f->operating_profit / 1000000) : '-'; ?></td>
                     <td><?php echo $f->net_income ? number_format($f->net_income / 1000000) : '-'; ?></td>
@@ -1765,12 +1767,10 @@ function wp_stocks_company_page() {
         $jq_qf = $wpdb->get_results($wpdb->prepare(
             "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source = 'jquants' AND fiscal_year IS NOT NULL AND fiscal_quarter IS NOT NULL ORDER BY fiscal_year ASC, fiscal_quarter ASC", $id
         ));
-        $jq_fetch_url = wp_nonce_url(admin_url('admin-post.php?action=fetch_quarterly_financials_jquants&stock_id=' . $id), 'wp_stocks_fetch_qfin_jquants_' . $id);
-        echo '<p style="color:#888;font-size:12px;margin-bottom:15px;">J-Quants由来のデータです。各値は決算短信の慣行に従い「期首からの累計値」です（通常は週次Cronで自動取得されます）。</p>';
-        echo '<p style="text-align:right;margin-bottom:15px;"><a href="' . esc_url($jq_fetch_url) . '" class="button">&#x1F504; J-Quantsから四半期データを取得</a></p>';
+        echo '<p style="color:#888;font-size:12px;margin-bottom:15px;">J-Quants由来のデータです。各値は決算短信の慣行に従い「期首からの累計値」です（通常は週次Cronで自動取得されます。手動更新は上部「年間」セクションの統合ボタンから行えます）。</p>';
 
         if (empty($jq_qf)) {
-            echo '<p style="color:#888;">四半期データがまだ取得されていません。上のボタンから取得するか、週次Cronの実行をお待ちください。</p>';
+            echo '<p style="color:#888;">四半期データがまだ取得されていません。上部の統合ボタンから取得するか、週次Cronの実行をお待ちください。</p>';
         } else {
             $jq_by_fy = array();
             foreach ($jq_qf as $row) {

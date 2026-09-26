@@ -612,22 +612,9 @@ add_action('admin_post_upload_edinet_codelist', function() {
     exit;
 });
 
-add_action('admin_post_fetch_financials', function() {
-    $stock_id = intval($_GET['stock_id'] ?? 0);
-    wp_stocks_require_admin_action('wp_stocks_fetch_fin_' . $stock_id);
-    global $wpdb;
-    $stock = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}stocks WHERE id = %d", $stock_id));
-    if (!$stock) wp_die('銘柄が見つかりません');
-    $result = wp_stocks_fetch_financials($stock_id, $stock->code);
-    $from   = sanitize_text_field($_GET['from'] ?? 'company');
-    if ($from === 'finance') {
-        $redirect = admin_url('admin.php?page=wp-stocks-company&stock_id=' . $stock_id . '&ctab=finance&message=' . ($result ? 'fin_saved' : 'fin_error'));
-    } else {
-        $redirect = admin_url('admin.php?page=wp-stocks-manager&message=' . ($result ? 'fin_saved' : 'fin_error'));
-    }
-    wp_redirect($redirect);
-    exit;
-});
+// ★2026-09-26廃止：admin_post_fetch_financials（EDINET年間財務データ取得ボタン）は
+// wp_stocks_fetch_financials()の削除に伴い削除。「年間」セクションはJ-Quantsの
+// admin_post_fetch_quarterly_financials_jquants（四半期取得と共通）に統合された。
 add_action('admin_post_fetch_quarterly_financials', function() {
     $stock_id = intval($_GET['stock_id'] ?? 0);
     wp_stocks_require_admin_action('wp_stocks_fetch_qfin_' . $stock_id);
