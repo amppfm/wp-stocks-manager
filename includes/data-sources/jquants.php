@@ -9,8 +9,11 @@ function wp_stocks_jquants_get_api_key() {
     return get_option('wp_stocks_jquants_api_key', '');
 }
 
-// 銘柄コードから最新のfins/summaryレコードを取得（複数開示がある場合は最新日付を採用）
-function wp_stocks_jquants_get_fins_summary($code) {
+// 銘柄コードを指定してfins/summaryの生レコード配列を取得（共通処理）
+// code指定のみの場合、当該銘柄の取得可能な全期間分のレコードが1回のリクエストで返る仕様
+// （公式ドキュメント: パラメータの組み合わせ表より）。最新値抽出・四半期保存の両方でこれを使い回し、
+// 1銘柄あたりのAPIコール数を1回に保つ。
+function wp_stocks_jquants_get_fins_records($code) {
     $api_key = wp_stocks_jquants_get_api_key();
     if (empty($api_key)) {
         wp_stocks_log('error', 'jquants_fins_summary', $code, 'APIキー未設定');
@@ -31,6 +34,7 @@ function wp_stocks_jquants_get_fins_summary($code) {
     $raw_body = wp_remote_retrieve_body($response);
 
     // レート制限（429）の場合は少し待って1回だけ再試行する
+    // ※fins/summaryは60リクエスト/分という専用の緩いレート制限のため、通常は発生しない想定
     if ($status === 429) {
         sleep(5);
         $response = wp_remote_get($url, [
@@ -51,19 +55,31 @@ function wp_stocks_jquants_get_fins_summary($code) {
     }
 
     $body = json_decode($raw_body, true);
-    // レスポンスのトップレベルキー名は実地確認するまで複数候補を許容
-	$records = $body['data'] ?? [];
+    $records = $body['data'] ?? [];
     if (empty($records) || !is_array($records)) {
         wp_stocks_log('error', 'jquants_fins_summary', $code, 'レコードなし: ' . $raw_body);
         return false;
     }
 
-    // 最新開示分を採用（DiscDate + DiscNoで判定）
+    // 最新開示分が先頭に来るよう降順ソート（DiscDate + DiscNoで判定）
     usort($records, function($a, $b) {
         $da = ($a['DiscDate'] ?? '') . ($a['DiscNo'] ?? '');
         $db = ($b['DiscDate'] ?? '') . ($b['DiscNo'] ?? '');
         return strcmp($db, $da); // 降順
     });
+
+    return $records;
+}
+
+// 銘柄コードから最新のfins/summaryレコードを取得（複数開示がある場合は最新日付を採用）
+function wp_stocks_jquants_get_fins_summary($code) {
+    $records = wp_stocks_jquants_get_fins_records($code);
+    if ($records === false) return false;
+    return wp_stocks_jquants_get_fins_summary_from_records($records);
+}
+
+// 上と同じ処理だが、取得済みのレコード配列を受け取る版（APIコールを増やさず使い回すため）
+function wp_stocks_jquants_get_fins_summary_from_records($records) {
     $latest = $records[0];
 
     // ROEは本決算(FY)開示でしか算出されないため、直近の非空値を別途探す
@@ -100,6 +116,97 @@ function wp_stocks_jquants_get_fins_summary($code) {
         'forecast_dividend_annual' => $clean($latest['FDivAnn'] ?? null),
         'disc_date'                => $latest['DiscDate'] ?? null,
     ];
+}
+
+// -----------------------------------------------------------
+// 四半期財務データ（J-Quants版）
+// fins/summaryのCurPerType（1Q/2Q/3Q/FY）を四半期区分1〜4にマッピングして保存する。
+// JGAAPの慣行により、各値は「期首からの累計値」（Sales/OP/OdP/NP/CFO/CFI/CFF等）。
+// 単四半期の値が欲しい場合は、表示側で前四半期累計との差分を計算する
+// （wp_stocks_jquants_cumulative_to_single()参照）。
+// -----------------------------------------------------------
+function wp_stocks_jquants_extract_quarterly($records) {
+    if (!is_array($records)) return [];
+
+    $type_to_quarter = ['1Q' => 1, '2Q' => 2, '3Q' => 3, 'FY' => 4];
+
+    $clean_int = function($v) {
+        return ($v === '' || $v === null) ? null : intval($v);
+    };
+    $clean_float = function($v) {
+        return ($v === '' || $v === null) ? null : floatval($v);
+    };
+
+    $result = [];
+    foreach ($records as $r) {
+        $per_type = $r['CurPerType'] ?? '';
+        if (!isset($type_to_quarter[$per_type])) continue; // 4Q/5Q等の稀なケースは対象外
+
+        $period_end = $r['CurPerEn'] ?? '';
+        $fy_start   = $r['CurFYSt'] ?? '';
+        if (empty($period_end) || empty($fy_start)) continue;
+
+        $fiscal_year = intval(substr($fy_start, 0, 4));
+
+        $result[] = [
+            'period_end'        => $period_end,
+            'fiscal_year'       => $fiscal_year,
+            'fiscal_quarter'    => $type_to_quarter[$per_type],
+            'revenue'           => $clean_int($r['Sales'] ?? null),
+            'operating_profit'  => $clean_int($r['OP'] ?? null),
+            'ordinary_profit'   => $clean_int($r['OdP'] ?? null),
+            'net_income'        => $clean_int($r['NP'] ?? null),
+            'eps'               => $clean_float($r['EPS'] ?? null),
+            'cf_operating'      => $clean_int($r['CFO'] ?? null),
+            'cf_investing'      => $clean_int($r['CFI'] ?? null),
+            'cf_financing'      => $clean_int($r['CFF'] ?? null),
+            'cash_equivalents'  => $clean_int($r['CashEq'] ?? null),
+        ];
+    }
+    return $result;
+}
+
+function wp_stocks_jquants_save_quarterly_financials($stock_id, $records) {
+    global $wpdb;
+    $quarters = wp_stocks_jquants_extract_quarterly($records);
+    if (empty($quarters)) return false;
+
+    $saved = 0;
+    foreach ($quarters as $q) {
+        $existing = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND period_end = %s AND source = 'jquants'",
+            $stock_id, $q['period_end']
+        ));
+        $data = array_merge(['stock_id' => $stock_id, 'source' => 'jquants'], $q);
+        if ($existing) {
+            $wpdb->update($wpdb->prefix . 'stock_quarterly_financials', $data, ['id' => $existing]);
+        } else {
+            $wpdb->insert($wpdb->prefix . 'stock_quarterly_financials', $data);
+        }
+        $saved++;
+    }
+    return $saved > 0;
+}
+
+// 同一会計年度内の累計値配列（fiscal_quarter=>値）から、単四半期の値を差引計算する
+// 例：[1=>100, 2=>250, 3=>420, 4=>600] → [1=>100, 2=>150, 3=>170, 4=>180]
+// 値がnull、または前四半期が欠損している場合はnullを返す（不正確な差分を避けるため）
+function wp_stocks_jquants_cumulative_to_single($cum_by_quarter) {
+    $single = [];
+    $prev = 0;
+    for ($q = 1; $q <= 4; $q++) {
+        if (!isset($cum_by_quarter[$q]) || $cum_by_quarter[$q] === null) {
+            $single[$q] = null;
+            continue;
+        }
+        if ($q === 1) {
+            $single[$q] = $cum_by_quarter[$q];
+        } else {
+            $single[$q] = ($prev !== null) ? ($cum_by_quarter[$q] - $prev) : null;
+        }
+        $prev = $cum_by_quarter[$q];
+    }
+    return $single;
 }
 
 // -----------------------------------------------------------
@@ -205,7 +312,8 @@ function wp_stocks_jquants_market_code_to_label($market_code) {
 function wp_stocks_jquants_sync_stock($stock_id, $code) {
     global $wpdb;
 
-    $data   = wp_stocks_jquants_get_fins_summary($code);
+    $records = wp_stocks_jquants_get_fins_records($code);
+    $data    = $records !== false ? wp_stocks_jquants_get_fins_summary_from_records($records) : false;
     // equities/masterは全銘柄一括取得＋キャッシュ方式に変更したため、ここでのネットワーク呼び出しは
     // 通常発生しない（初回のみ1回）。よってfins/summaryとの間隔調整は不要になった。
     $master = wp_stocks_jquants_get_equities_master($code);
@@ -225,6 +333,10 @@ function wp_stocks_jquants_sync_stock($stock_id, $code) {
         $update['jquants_roe']                       = $data['roe'];
         $update['jquants_forecast_dividend_annual']  = $data['forecast_dividend_annual'];
         $update['jquants_disc_date']                 = $data['disc_date'];
+
+        // 四半期データ（1Q/2Q累計/3Q累計/通期）をstock_quarterly_financialsへ保存
+        // ※APIコールは上のwp_stocks_jquants_get_fins_records()と共通（追加コールなし）
+        wp_stocks_jquants_save_quarterly_financials($stock_id, $records);
     }
 
     if ($master) {
@@ -292,7 +404,23 @@ function wp_stocks_jquants_test_fetch() {
     echo wp_remote_retrieve_response_code($response) . "\n\n";
     echo "=== 生レスポンス ===\n";
     echo wp_remote_retrieve_body($response) . "\n\n";
-    echo "=== wp_stocks_jquants_get_fins_summary() のパース結果 ===\n";
+    echo "=== wp_stocks_jquants_get_fins_summary() のパース結果（最新1件） ===\n";
     print_r(wp_stocks_jquants_get_fins_summary($code));
+    echo "\n=== wp_stocks_jquants_extract_quarterly() のパース結果（四半期保存対象・累計値） ===\n";
+    $records = wp_stocks_jquants_get_fins_records($code);
+    $quarters = $records !== false ? wp_stocks_jquants_extract_quarterly($records) : [];
+    print_r($quarters);
+
+    echo "\n=== 差引計算した単四半期の値（会計年度別） ===\n";
+    $by_fy = [];
+    foreach ($quarters as $q) {
+        $by_fy[$q['fiscal_year']]['revenue'][$q['fiscal_quarter']]    = $q['revenue'];
+        $by_fy[$q['fiscal_year']]['net_income'][$q['fiscal_quarter']] = $q['net_income'];
+    }
+    foreach ($by_fy as $fy => $series) {
+        echo "--- {$fy}年度 ---\n";
+        echo "売上高（単四半期）: "; print_r(wp_stocks_jquants_cumulative_to_single($series['revenue']));
+        echo "純利益（単四半期）: "; print_r(wp_stocks_jquants_cumulative_to_single($series['net_income']));
+    }
     exit;
 	}

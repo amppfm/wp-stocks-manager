@@ -256,6 +256,29 @@ function wp_stocks_manager_create_tables() {
     if (!in_array('fiscal_quarter', $wsm_qf_columns, true)) {
         $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN fiscal_quarter TINYINT DEFAULT NULL AFTER fiscal_year");
     }
+    // J-Quants（日本株）向け：営業利益・経常利益・EPS・キャッシュフロー3種・現金同等物
+    // いずれもJGAAPの慣行に従い「期首からの累計値」として保存する（yahoo/edgar由来の行はNULLのまま）
+    if (!in_array('operating_profit', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN operating_profit BIGINT DEFAULT NULL AFTER net_income");
+    }
+    if (!in_array('ordinary_profit', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN ordinary_profit BIGINT DEFAULT NULL AFTER operating_profit");
+    }
+    if (!in_array('eps', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN eps FLOAT DEFAULT NULL AFTER ordinary_profit");
+    }
+    if (!in_array('cf_operating', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN cf_operating BIGINT DEFAULT NULL AFTER eps");
+    }
+    if (!in_array('cf_investing', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN cf_investing BIGINT DEFAULT NULL AFTER cf_operating");
+    }
+    if (!in_array('cf_financing', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN cf_financing BIGINT DEFAULT NULL AFTER cf_investing");
+    }
+    if (!in_array('cash_equivalents', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN cash_equivalents BIGINT DEFAULT NULL AFTER cf_financing");
+    }
 
     // 既存テーブルへのカラム追加
     $columns = $wpdb->get_col("DESCRIBE {$wpdb->prefix}stocks", 0);

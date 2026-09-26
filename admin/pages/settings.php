@@ -667,6 +667,27 @@ function wp_stocks_settings_page() {
     echo '<a href="' . esc_url($fmp_test_ko_url) . '" class="button" target="_blank">KOで取得テスト</a>';
     echo '<p class="description">FMPから財務スコアカード指標（PER/PBR/ROE/自己資本比率/配当利回り/PEG/利益率/次回決算日）を取得し、プレーンテキストで表示します。</p>';
     echo '</td></tr>';
+
+    // J-Quants 動作確認リンク（四半期財務データ：売上高/営業利益/経常利益/純利益/EPS/CF等）
+    echo '<tr><th>J-Quants 動作確認（四半期）</th><td>';
+    echo '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">';
+    echo '<input type="text" id="wp_stocks_jquants_test_code" style="width:100px;" placeholder="銘柄コード" value="86970">';
+    echo '<button type="button" class="button" id="wp_stocks_jquants_test_btn">取得テスト</button>';
+    echo '</div>';
+    echo '<p class="description">fins/summaryの生レスポンス・最新値パース結果・四半期保存対象データ（累計値）・差引計算した単四半期の値を、プレーンテキストで表示します。</p>';
+    echo '</td></tr>';
+    echo '<script>
+    (function(){
+        var btn = document.getElementById("wp_stocks_jquants_test_btn");
+        if (btn) {
+            btn.addEventListener("click", function(){
+                var code = document.getElementById("wp_stocks_jquants_test_code").value || "86970";
+                var base = ' . json_encode(wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_jquants_test_fetch'), 'wp_stocks_jquants_test')) . ';
+                window.open(base + "&code=" + encodeURIComponent(code), "_blank");
+            });
+        }
+    })();
+    </script>';
     echo '<script>
     (function(){
         function wpStocksEdgarBindLink(linkId, baseUrl) {

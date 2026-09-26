@@ -1736,6 +1736,13 @@ function wp_stocks_company_page() {
     echo '<h2 style="border-left:4px solid #0073aa;padding-left:10px;margin-top:30px;">四半期</h2>';
 
     if (!$is_usd) {
+        echo '<div style="margin-bottom:15px;">';
+        echo '<button type="button" class="button" id="jpQtabBtnYahoo" style="margin-right:6px;">Yahoo Finance</button>';
+        echo '<button type="button" class="button button-primary" id="jpQtabBtnJquants">J-Quants</button>';
+        echo '</div>';
+
+        // ===== 日本株: Yahoo Finance由来（従来表示） =====
+        echo '<div id="jpQtabYahoo" style="display:none;">';
         $qf = $wpdb->get_results($wpdb->prepare(
             "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source = 'yahoo' ORDER BY period_end DESC", $id
         ));
@@ -1751,6 +1758,193 @@ function wp_stocks_company_page() {
             }
             echo '</tbody></table>';
         }
+        echo '</div>'; // #jpQtabYahoo
+
+        // ===== 日本株: J-Quants由来（累計比較＋進捗率ゲージ＋差引単四半期＋CF） =====
+        echo '<div id="jpQtabJquants">';
+        $jq_qf = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source = 'jquants' AND fiscal_year IS NOT NULL AND fiscal_quarter IS NOT NULL ORDER BY fiscal_year ASC, fiscal_quarter ASC", $id
+        ));
+        $jq_fetch_url = wp_nonce_url(admin_url('admin-post.php?action=fetch_quarterly_financials_jquants&stock_id=' . $id), 'wp_stocks_fetch_qfin_jquants_' . $id);
+        echo '<p style="color:#888;font-size:12px;margin-bottom:15px;">J-Quants由来のデータです。各値は決算短信の慣行に従い「期首からの累計値」です（通常は週次Cronで自動取得されます）。</p>';
+        echo '<p style="text-align:right;margin-bottom:15px;"><a href="' . esc_url($jq_fetch_url) . '" class="button">&#x1F504; J-Quantsから四半期データを取得</a></p>';
+
+        if (empty($jq_qf)) {
+            echo '<p style="color:#888;">四半期データがまだ取得されていません。上のボタンから取得するか、週次Cronの実行をお待ちください。</p>';
+        } else {
+            $jq_by_fy = array();
+            foreach ($jq_qf as $row) {
+                $jq_by_fy[$row->fiscal_year][$row->fiscal_quarter] = $row;
+            }
+            krsort($jq_by_fy);
+            $jq_fys     = array_keys($jq_by_fy);
+            $jq_cur_fy  = $jq_fys[0] ?? null;
+            $jq_prev_fy = $jq_fys[1] ?? null;
+
+            $jq_cur_rows  = $jq_cur_fy  !== null ? $jq_by_fy[$jq_cur_fy]  : array();
+            $jq_prev_rows = $jq_prev_fy !== null ? $jq_by_fy[$jq_prev_fy] : array();
+
+            // J-Quantsのデータは既に「期首からの累計値」なので、EDGARのような変換は不要。
+            // 1〜4（1Q/2Q累計/3Q累計/通期）のインデックスでそのまま並べるだけでよい。
+            $jq_build_cum = function($rows, $field) {
+                $out = array();
+                for ($q = 1; $q <= 4; $q++) {
+                    $out[] = isset($rows[$q]) && $rows[$q]->$field !== null ? floatval($rows[$q]->$field) : null;
+                }
+                return $out;
+            };
+
+            $jq_cur_revenue_cum  = $jq_build_cum($jq_cur_rows, 'revenue');
+            $jq_cur_ni_cum       = $jq_build_cum($jq_cur_rows, 'net_income');
+            $jq_prev_revenue_cum = $jq_build_cum($jq_prev_rows, 'revenue');
+            $jq_prev_ni_cum      = $jq_build_cum($jq_prev_rows, 'net_income');
+
+            $jq_categories = array('1Q', '2Q累計', '3Q累計', '通期');
+
+            $jq_prev_revenue_full = $jq_prev_revenue_cum[3];
+            $jq_prev_ni_full      = $jq_prev_ni_cum[3];
+            $jq_cur_revenue_latest = null;
+            foreach (array_reverse($jq_cur_revenue_cum) as $v) { if ($v !== null) { $jq_cur_revenue_latest = $v; break; } }
+            $jq_cur_ni_latest = null;
+            foreach (array_reverse($jq_cur_ni_cum) as $v) { if ($v !== null) { $jq_cur_ni_latest = $v; break; } }
+            $jq_revenue_progress = (!empty($jq_prev_revenue_full) && $jq_cur_revenue_latest !== null) ? round($jq_cur_revenue_latest / $jq_prev_revenue_full * 100, 1) : null;
+            $jq_ni_progress      = (!empty($jq_prev_ni_full) && $jq_cur_ni_latest !== null) ? round($jq_cur_ni_latest / $jq_prev_ni_full * 100, 1) : null;
+            ?>
+            <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+
+            <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:20px;">
+                <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;flex:1;min-width:200px;text-align:center;">
+                    <h3 style="margin:0 0 5px 0;font-size:14px;">売上高 進捗率</h3>
+                    <div id="gaugeJqRevenue"></div>
+                </div>
+                <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;flex:1;min-width:200px;text-align:center;">
+                    <h3 style="margin:0 0 5px 0;font-size:14px;">純利益 進捗率</h3>
+                    <div id="gaugeJqNetIncome"></div>
+                </div>
+            </div>
+
+            <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;">
+                <h3 style="margin:0 0 15px 0;font-size:14px;">&#x1F4B9; 売上高（前期比・累計・百万円）</h3>
+                <div id="finChartJqQuarterlyRevenue"></div>
+            </div>
+            <div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;">
+                <h3 style="margin:0 0 15px 0;font-size:14px;">&#x1F4B9; 純利益（前期比・累計・百万円）</h3>
+                <div id="finChartJqQuarterlyNetIncome"></div>
+            </div>
+
+            <script>
+            (function() {
+                function wpStocksJqGauge(elId, value, label) {
+                    if (value === null) {
+                        document.getElementById(elId).innerHTML = '<p style="color:#888;padding:30px 0;">データ不足</p>';
+                        return;
+                    }
+                    new ApexCharts(document.getElementById(elId), {
+                        chart: { type: 'radialBar', height: 220 },
+                        series: [Math.max(0, Math.min(value, 150))],
+                        plotOptions: {
+                            radialBar: {
+                                startAngle: -90, endAngle: 90,
+                                hollow: { size: '60%' },
+                                dataLabels: {
+                                    name: { show: false },
+                                    value: { fontSize: '24px', formatter: function() { return value + '%'; }, offsetY: -10 },
+                                },
+                            },
+                        },
+                        fill: { colors: ['#0073aa'] },
+                        labels: [label],
+                    }).render();
+                }
+                wpStocksJqGauge('gaugeJqRevenue', <?php echo json_encode($jq_revenue_progress); ?>, '売上高進捗率');
+                wpStocksJqGauge('gaugeJqNetIncome', <?php echo json_encode($jq_ni_progress); ?>, '純利益進捗率');
+
+                function wpStocksJqQuarterlyChart(elId, prevData, curData) {
+                    new ApexCharts(document.getElementById(elId), {
+                        chart: { type: 'bar', height: 300, toolbar: { show: false } },
+                        series: [
+                            { name: '前期', data: prevData },
+                            { name: '当期', data: curData },
+                        ],
+                        xaxis: { categories: <?php echo json_encode($jq_categories); ?> },
+                        colors: ['#aed6f1', '#2980b9'],
+                        dataLabels: { enabled: false },
+                        legend: { position: 'top' },
+                        plotOptions: { bar: { columnWidth: '55%' } },
+                        yaxis: { labels: { formatter: function(v) { return v === null ? '' : v.toLocaleString(); } } },
+                        tooltip: { y: { formatter: function(v) { return v === null ? '-' : Number(v).toLocaleString() + '百万円'; } } },
+                    }).render();
+                }
+                wpStocksJqQuarterlyChart('finChartJqQuarterlyRevenue', <?php echo json_encode($jq_prev_revenue_cum); ?>, <?php echo json_encode($jq_cur_revenue_cum); ?>);
+                wpStocksJqQuarterlyChart('finChartJqQuarterlyNetIncome', <?php echo json_encode($jq_prev_ni_cum); ?>, <?php echo json_encode($jq_cur_ni_cum); ?>);
+            })();
+            </script>
+            <?php
+
+            // ----- 差引計算した単四半期の値（当期分） -----
+            $jq_single_revenue = wp_stocks_jquants_cumulative_to_single(array(
+                1 => $jq_cur_revenue_cum[0], 2 => $jq_cur_revenue_cum[1], 3 => $jq_cur_revenue_cum[2], 4 => $jq_cur_revenue_cum[3],
+            ));
+            $jq_cur_op_cum  = $jq_build_cum($jq_cur_rows, 'operating_profit');
+            $jq_cur_odp_cum = $jq_build_cum($jq_cur_rows, 'ordinary_profit');
+            $jq_single_op = wp_stocks_jquants_cumulative_to_single(array(
+                1 => $jq_cur_op_cum[0], 2 => $jq_cur_op_cum[1], 3 => $jq_cur_op_cum[2], 4 => $jq_cur_op_cum[3],
+            ));
+            $jq_single_odp = wp_stocks_jquants_cumulative_to_single(array(
+                1 => $jq_cur_odp_cum[0], 2 => $jq_cur_odp_cum[1], 3 => $jq_cur_odp_cum[2], 4 => $jq_cur_odp_cum[3],
+            ));
+            $jq_single_ni = wp_stocks_jquants_cumulative_to_single(array(
+                1 => $jq_cur_ni_cum[0], 2 => $jq_cur_ni_cum[1], 3 => $jq_cur_ni_cum[2], 4 => $jq_cur_ni_cum[3],
+            ));
+
+            $jq_fmt_m = function($v) { return $v === null ? '-' : number_format($v / 1000000); };
+
+            echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;">';
+            echo '<h3 style="margin:0 0 15px 0;font-size:14px;">&#x1F4CA; ' . esc_html($jq_cur_fy) . '年度 単四半期の値（累計からの差引計算・百万円）</h3>';
+            echo '<table class="widefat" style="font-size:13px;"><thead><tr><th></th><th>1Q</th><th>2Q単体</th><th>3Q単体</th><th>4Q単体</th></tr></thead><tbody>';
+            echo '<tr><td>売上高</td><td>' . $jq_fmt_m($jq_single_revenue[1]) . '</td><td>' . $jq_fmt_m($jq_single_revenue[2]) . '</td><td>' . $jq_fmt_m($jq_single_revenue[3]) . '</td><td>' . $jq_fmt_m($jq_single_revenue[4]) . '</td></tr>';
+            echo '<tr><td>営業利益</td><td>' . $jq_fmt_m($jq_single_op[1]) . '</td><td>' . $jq_fmt_m($jq_single_op[2]) . '</td><td>' . $jq_fmt_m($jq_single_op[3]) . '</td><td>' . $jq_fmt_m($jq_single_op[4]) . '</td></tr>';
+            echo '<tr><td>経常利益</td><td>' . $jq_fmt_m($jq_single_odp[1]) . '</td><td>' . $jq_fmt_m($jq_single_odp[2]) . '</td><td>' . $jq_fmt_m($jq_single_odp[3]) . '</td><td>' . $jq_fmt_m($jq_single_odp[4]) . '</td></tr>';
+            echo '<tr><td>純利益</td><td>' . $jq_fmt_m($jq_single_ni[1]) . '</td><td>' . $jq_fmt_m($jq_single_ni[2]) . '</td><td>' . $jq_fmt_m($jq_single_ni[3]) . '</td><td>' . $jq_fmt_m($jq_single_ni[4]) . '</td></tr>';
+            echo '</tbody></table>';
+            echo '<p style="color:#888;font-size:11px;margin-top:8px;">※ 決算期変更や訂正開示があった場合、差引計算の値が実態とずれる可能性があります。参考値としてご利用ください。</p>';
+            echo '</div>';
+
+            // ----- キャッシュフロー（累計値のまま表示） -----
+            echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;">';
+            echo '<h3 style="margin:0 0 15px 0;font-size:14px;">&#x1F4B0; キャッシュフロー（期首からの累計・百万円）</h3>';
+            echo '<table class="widefat" style="font-size:13px;"><thead><tr><th>期末日</th><th>区分</th><th>営業CF</th><th>投資CF</th><th>財務CF</th><th>現金同等物</th></tr></thead><tbody>';
+            $jq_quarter_label = array(1 => '1Q', 2 => '2Q累計', 3 => '3Q累計', 4 => '通期');
+            foreach ($jq_qf as $row) {
+                echo '<tr><td>' . esc_html($row->period_end) . '</td><td>' . esc_html($jq_quarter_label[$row->fiscal_quarter] ?? '') . '</td>'
+                    . '<td>' . $jq_fmt_m($row->cf_operating !== null ? floatval($row->cf_operating) : null) . '</td>'
+                    . '<td>' . $jq_fmt_m($row->cf_investing !== null ? floatval($row->cf_investing) : null) . '</td>'
+                    . '<td>' . $jq_fmt_m($row->cf_financing !== null ? floatval($row->cf_financing) : null) . '</td>'
+                    . '<td>' . $jq_fmt_m($row->cash_equivalents !== null ? floatval($row->cash_equivalents) : null) . '</td></tr>';
+            }
+            echo '</tbody></table>';
+            echo '</div>';
+        }
+        echo '</div>'; // #jpQtabJquants
+
+        echo '<script>
+        (function(){
+            var btnYahoo = document.getElementById("jpQtabBtnYahoo");
+            var btnJq    = document.getElementById("jpQtabBtnJquants");
+            var tabYahoo = document.getElementById("jpQtabYahoo");
+            var tabJq    = document.getElementById("jpQtabJquants");
+            if (!btnYahoo || !btnJq || !tabYahoo || !tabJq) return;
+            function show(which) {
+                tabYahoo.style.display = which === "yahoo" ? "" : "none";
+                tabJq.style.display    = which === "jquants" ? "" : "none";
+                btnYahoo.className = which === "yahoo" ? "button button-primary" : "button";
+                btnJq.className    = which === "jquants" ? "button button-primary" : "button";
+            }
+            btnYahoo.addEventListener("click", function(){ show("yahoo"); });
+            btnJq.addEventListener("click", function(){ show("jquants"); });
+            show("jquants");
+        })();
+        </script>';
     } else {
         // ===== 米国株: SEC EDGAR由来の四半期（累計比較＋進捗率ゲージ） =====
         $edgar_qf = $wpdb->get_results($wpdb->prepare(

@@ -649,6 +649,17 @@ add_action('admin_post_fetch_quarterly_financials_edgar', function() {
     wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $stock_id . '&ctab=finance&ftab=quarterly&message=' . ($result ? 'fin_saved' : 'fin_error')));
     exit;
 });
+add_action('admin_post_fetch_quarterly_financials_jquants', function() {
+    $stock_id = intval($_GET['stock_id'] ?? 0);
+    wp_stocks_require_admin_action('wp_stocks_fetch_qfin_jquants_' . $stock_id);
+    global $wpdb;
+    $stock = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}stocks WHERE id = %d", $stock_id));
+    if (!$stock) wp_die('銘柄が見つかりません');
+    $records = wp_stocks_jquants_get_fins_records($stock->code);
+    $result = $records !== false ? wp_stocks_jquants_save_quarterly_financials($stock_id, $records) : false;
+    wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $stock_id . '&ctab=finance&ftab=quarterly&message=' . ($result ? 'fin_saved' : 'fin_error')));
+    exit;
+});
 add_action('admin_post_wp_stocks_edgar_test_fetch', function() {
     wp_stocks_require_admin_action('wp_stocks_edgar_test');
     $symbol   = sanitize_text_field($_GET['symbol'] ?? 'AAPL');
