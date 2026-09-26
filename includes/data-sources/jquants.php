@@ -197,6 +197,7 @@ function wp_stocks_jquants_cumulative_to_single($cum_by_quarter) {
     for ($q = 1; $q <= 4; $q++) {
         if (!isset($cum_by_quarter[$q]) || $cum_by_quarter[$q] === null) {
             $single[$q] = null;
+            $prev = null; // ★修正：欠損を後続四半期に伝播させ、ずれた基準値での誤差分計算を防ぐ
             continue;
         }
         if ($q === 1) {
