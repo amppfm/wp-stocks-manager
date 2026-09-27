@@ -460,8 +460,18 @@ function wp_stocks_manager_activate() {
         wp_schedule_event($next4->getTimestamp(), 'daily', 'wp_stocks_price_cleanup');
     }
     if (!wp_next_scheduled('wp_stocks_company_cron')) {
-        $now5  = new DateTime('now', new DateTimeZone('Asia/Tokyo'));
-        $next5 = new DateTime('next Sunday 22:00:00', new DateTimeZone('Asia/Tokyo'));
+        $company_day    = intval(get_option('wp_stocks_company_cron_day', 0)); // 0=日〜6=土
+        $company_day    = max(0, min(6, $company_day));
+        $company_time   = get_option('wp_stocks_company_cron_time', '22:00');
+        if (!preg_match('/^\d{2}:\d{2}$/', $company_time)) $company_time = '22:00';
+        list($ch5, $cm5) = explode(':', $company_time);
+        $now5   = new DateTime('now', new DateTimeZone('Asia/Tokyo'));
+        $next5  = clone $now5;
+        $next5->setTime((int)$ch5, (int)$cm5, 0);
+        $diff5  = $company_day - (int)$next5->format('w');
+        if ($diff5 < 0) $diff5 += 7;
+        if ($diff5 === 0 && $next5 <= $now5) $diff5 = 7;
+        if ($diff5 > 0) $next5->modify("+{$diff5} days");
         wp_schedule_event($next5->getTimestamp(), 'weekly', 'wp_stocks_company_cron');
     }
     if (!wp_next_scheduled('wp_stocks_us_cron_event')) {

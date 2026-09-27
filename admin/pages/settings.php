@@ -207,6 +207,24 @@ function wp_stocks_settings_page() {
         if ($now_u >= $next_u) $next_u->modify('+1 day');
         wp_schedule_event($next_u->getTimestamp(), 'daily', 'wp_stocks_us_cron_event');
 
+        // 企業情報週次更新（J-Quants週次同期・EDGAR四半期取得を含む）の曜日・時刻
+        $company_cron_day = isset($_POST['company_cron_day']) ? intval($_POST['company_cron_day']) : 0;
+        $company_cron_day = max(0, min(6, $company_cron_day));
+        update_option('wp_stocks_company_cron_day', $company_cron_day);
+        $company_cron_time = sanitize_text_field($_POST['company_cron_time'] ?? '22:00');
+        if (!preg_match('/^\d{2}:\d{2}$/', $company_cron_time)) $company_cron_time = '22:00';
+        update_option('wp_stocks_company_cron_time', $company_cron_time);
+        wp_clear_scheduled_hook('wp_stocks_company_cron');
+        list($cch, $ccm) = explode(':', $company_cron_time);
+        $now_cc  = new DateTime('now', new DateTimeZone('Asia/Tokyo'));
+        $next_cc = clone $now_cc;
+        $next_cc->setTime((int)$cch, (int)$ccm, 0);
+        $diff_cc = $company_cron_day - (int)$next_cc->format('w');
+        if ($diff_cc < 0) $diff_cc += 7;
+        if ($diff_cc === 0 && $next_cc <= $now_cc) $diff_cc = 7;
+        if ($diff_cc > 0) $next_cc->modify("+{$diff_cc} days");
+        wp_schedule_event($next_cc->getTimestamp(), 'weekly', 'wp_stocks_company_cron');
+
         // 為替レート手動設定
         $usd_jpy_manual = floatval($_POST['usd_jpy_manual'] ?? 0);
         update_option('wp_stocks_usd_jpy_manual', $usd_jpy_manual);
@@ -588,9 +606,18 @@ function wp_stocks_settings_page() {
 
     $next_company     = wp_next_scheduled('wp_stocks_company_cron');
     $next_company_str = $next_company ? (new DateTime('@' . $next_company))->setTimezone(new DateTimeZone('Asia/Tokyo'))->format('Y/m/d H:i:s') : '未設定';
+    $company_cron_day  = intval(get_option('wp_stocks_company_cron_day', 0));
+    $company_cron_time = get_option('wp_stocks_company_cron_time', '22:00');
+    $wss_weekday_names = ['日', '月', '火', '水', '木', '金', '土'];
 
     echo '<tr><th>企業情報週次更新</th><td>';
-    echo '<p class="description">毎週日曜22:00にPER・PBR等の企業情報を自動更新します。<br>次回実行予定：' . esc_html($next_company_str) . '</p>';
+    echo '<select name="company_cron_day" style="width:80px;">';
+    foreach ($wss_weekday_names as $wss_day_idx => $wss_day_label) {
+        echo '<option value="' . esc_attr($wss_day_idx) . '"' . selected($company_cron_day, $wss_day_idx, false) . '>' . esc_html($wss_day_label) . '曜日</option>';
+    }
+    echo '</select> ';
+    echo '<input type="time" name="company_cron_time" value="' . esc_attr($company_cron_time) . '" style="width:120px;">';
+    echo '<p class="description">PER・PBR等の企業情報、日本株のJ-Quants週次同期（33業種・市場区分・予想EPS等）、米国株のSEC EDGAR四半期取得をこの曜日・時刻に自動実行します。<br>次回実行予定：' . esc_html($next_company_str) . '</p>';
     echo '<button type="submit" name="wp_stocks_bulk_update" class="button" style="margin-top:5px;" onclick="return confirm(\'全銘柄の企業情報を今すぐ再取得しますか？\n銘柄数が多い場合は時間がかかります。\');">今すぐ全銘柄を一括更新</button>';
     echo '</td></tr>';
 
