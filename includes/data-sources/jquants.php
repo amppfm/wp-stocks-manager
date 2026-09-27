@@ -162,6 +162,14 @@ function wp_stocks_jquants_extract_quarterly($records) {
             'cf_financing'      => $clean_int($r['CFF'] ?? null),
             'cash_equivalents'  => $clean_int($r['CashEq'] ?? null),
             'equity_ratio'      => $clean_float($r['EqAR'] ?? null),
+            'equity'                => $clean_int($r['Eq'] ?? null),
+            'total_assets'          => $clean_int($r['TA'] ?? null),
+            'dividend_annual'       => $clean_float($r['DivAnn'] ?? null),
+            'payout_ratio_annual'   => $clean_float($r['PayoutRatioAnn'] ?? null),
+            'dividend_q1'           => $clean_float($r['Div1Q'] ?? null),
+            'dividend_q2'           => $clean_float($r['Div2Q'] ?? null),
+            'dividend_q3'           => $clean_float($r['Div3Q'] ?? null),
+            'dividend_fy'           => $clean_float($r['DivFY'] ?? null),
         ];
     }
     return $result;

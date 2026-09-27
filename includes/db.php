@@ -273,6 +273,32 @@ function wp_stocks_manager_create_tables() {
     if (!in_array('equity_ratio', $wsm_qf_columns, true)) {
         $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN equity_ratio FLOAT DEFAULT NULL AFTER cash_equivalents");
     }
+    // ★2026-09-26追加：J-Quants Freeプランで実際に取得できると判明したため追加
+    // （純資産・総資産の絶対額、実配当関連。EDINET由来で取れていた項目にほぼ追いつく）
+    if (!in_array('equity', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN equity BIGINT DEFAULT NULL AFTER equity_ratio");
+    }
+    if (!in_array('total_assets', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN total_assets BIGINT DEFAULT NULL AFTER equity");
+    }
+    if (!in_array('dividend_annual', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN dividend_annual FLOAT DEFAULT NULL AFTER total_assets");
+    }
+    if (!in_array('payout_ratio_annual', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN payout_ratio_annual FLOAT DEFAULT NULL AFTER dividend_annual");
+    }
+    if (!in_array('dividend_q1', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN dividend_q1 FLOAT DEFAULT NULL AFTER payout_ratio_annual");
+    }
+    if (!in_array('dividend_q2', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN dividend_q2 FLOAT DEFAULT NULL AFTER dividend_q1");
+    }
+    if (!in_array('dividend_q3', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN dividend_q3 FLOAT DEFAULT NULL AFTER dividend_q2");
+    }
+    if (!in_array('dividend_fy', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN dividend_fy FLOAT DEFAULT NULL AFTER dividend_q3");
+    }
 
     // 既存テーブルへのカラム追加
     $columns = $wpdb->get_col("DESCRIBE {$wpdb->prefix}stocks", 0);

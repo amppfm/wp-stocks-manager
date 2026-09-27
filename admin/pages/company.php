@@ -1512,7 +1512,9 @@ function wp_stocks_company_page() {
             $fin_revenue[]   = $f->revenue     ? round($f->revenue / 1000000)     : 0;
             $fin_op_profit[] = $f->operating_profit ? round($f->operating_profit / 1000000) : 0;
             $fin_net_income[] = $f->net_income  ? round($f->net_income / 1000000)  : 0;
-            $fin_eq_ratio[]  = $f->equity_ratio ?? 0;
+            // ★2026-09-26修正：equity_ratioはJ-Quants側で小数（0.073=7.3%）で返るため、
+            // 従来のまま使うと「0.1%」のような表示になっていた。100倍してから使う。
+            $fin_eq_ratio[]  = $f->equity_ratio !== null ? round($f->equity_ratio * 100, 1) : 0;
             // 営業利益率（売上高が無い期間はグラフ上プロットしない）
             $calc_op_margin = ($f->revenue && $f->revenue > 0 && $f->operating_profit !== null)
                 ? round($f->operating_profit / $f->revenue * 100, 1)
@@ -1563,6 +1565,11 @@ function wp_stocks_company_page() {
                     <th>営業利益（百万円）</th>
                     <th>純利益（百万円）</th>
                     <th>自己資本比率</th>
+                    <th>純資産（百万円）</th>
+                    <th>総資産（百万円）</th>
+                    <th>年間配当（円）</th>
+                    <th>配当性向</th>
+                    <th>配当内訳（1Q/2Q/3Q/期末）</th>
                 </tr></thead>
                 <tbody>
                 <?php foreach ($financials as $f): ?>
@@ -1571,7 +1578,17 @@ function wp_stocks_company_page() {
                     <td><?php echo $f->revenue ? number_format($f->revenue / 1000000) : '-'; ?></td>
                     <td><?php echo $f->operating_profit ? number_format($f->operating_profit / 1000000) : '-'; ?></td>
                     <td><?php echo $f->net_income ? number_format($f->net_income / 1000000) : '-'; ?></td>
-                    <td><?php echo $f->equity_ratio ? number_format($f->equity_ratio, 1) . '%' : '-'; ?></td>
+                    <td><?php echo $f->equity_ratio !== null ? number_format($f->equity_ratio * 100, 1) . '%' : '-'; ?></td>
+                    <td><?php echo $f->equity ? number_format($f->equity / 1000000) : '-'; ?></td>
+                    <td><?php echo $f->total_assets ? number_format($f->total_assets / 1000000) : '-'; ?></td>
+                    <td><?php echo $f->dividend_annual !== null ? number_format($f->dividend_annual, 1) : '-'; ?></td>
+                    <td><?php echo $f->payout_ratio_annual !== null ? number_format($f->payout_ratio_annual * 100, 1) . '%' : '-'; ?></td>
+                    <td>
+                    <?php
+                    $div_parts = [$f->dividend_q1, $f->dividend_q2, $f->dividend_q3, $f->dividend_fy];
+                    echo esc_html(implode(' / ', array_map(function($d) { return $d !== null ? number_format($d, 1) : '-'; }, $div_parts)));
+                    ?>
+                    </td>
                 </tr>
                 <?php endforeach; ?>
                 </tbody>
