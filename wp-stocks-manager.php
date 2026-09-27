@@ -128,17 +128,25 @@ function wp_stocks_get_topix17_sector_map() {
 // マーケット情報ヒートマップ（日本株タブ）でTOPIX-17階層に集約するために使用
 // 対応表に存在しない（＝分類不能）業種名を渡された場合は null を返す
 // --------------------------------------------------
+// 業種名の表記ゆれ（全角/半角、中点の異体字、前後空白）を吸収する正規化
+function wp_stocks_normalize_sector_name($name) {
+    $name = trim((string) $name);
+    $name = mb_convert_kana($name, 'KV');
+    $name = str_replace(['･', '·', '‧'], '・', $name);
+    return $name;
+}
+
 function wp_stocks_sector33_to_topix17($sector33) {
     static $reverse_map = null;
     if ($reverse_map === null) {
         $reverse_map = [];
         foreach (wp_stocks_get_topix17_sector_map() as $topix17_code => $info) {
             foreach ($info['sectors'] as $s33) {
-                $reverse_map[$s33] = $topix17_code;
+                $reverse_map[wp_stocks_normalize_sector_name($s33)] = $topix17_code;
             }
         }
     }
-    return $reverse_map[$sector33] ?? null;
+    return $reverse_map[wp_stocks_normalize_sector_name($sector33)] ?? null;
 }
 
 // --------------------------------------------------

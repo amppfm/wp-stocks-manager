@@ -246,55 +246,65 @@ function wp_stocks_jquants_get_all_equities_master() {
         return $cache;
     }
 
-    $url = 'https://api.jquants.com/v2/equities/master';
-    $args = [
-        'headers' => ['x-api-key' => $api_key],
-        'timeout' => 30,
-    ];
-    $response = wp_remote_get($url, $args);
-    if (is_wp_error($response)) {
-        wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'APIエラー: ' . $response->get_error_message());
-        return $cache;
-    }
+    $base_url       = 'https://api.jquants.com/v2/equities/master';
+    $pagination_key = null;
+    $total          = 0;
 
-    $status   = wp_remote_retrieve_response_code($response);
-    $raw_body = wp_remote_retrieve_body($response);
+    do {
+        $url  = $base_url . ($pagination_key ? '?pagination_key=' . urlencode($pagination_key) : '');
+        $args = [
+            'headers' => ['x-api-key' => $api_key],
+            'timeout' => 30,
+        ];
 
-    // レート制限（429）の場合は少し待って1回だけ再試行する
-    if ($status === 429) {
-        sleep(15);
         $response = wp_remote_get($url, $args);
         if (is_wp_error($response)) {
-            wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'APIエラー（再試行後）: ' . $response->get_error_message());
-            return $cache;
+            wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'APIエラー: ' . $response->get_error_message());
+            break;
         }
+
         $status   = wp_remote_retrieve_response_code($response);
         $raw_body = wp_remote_retrieve_body($response);
-    }
 
-    if ($status !== 200) {
-        wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'HTTPエラー: ' . $status . ' / ' . $raw_body);
-        return $cache;
-    }
+        // レート制限（429）の場合は少し待って1回だけ再試行する
+        if ($status === 429) {
+            sleep(15);
+            $response = wp_remote_get($url, $args);
+            if (is_wp_error($response)) {
+                wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'APIエラー（再試行後）: ' . $response->get_error_message());
+                break;
+            }
+            $status   = wp_remote_retrieve_response_code($response);
+            $raw_body = wp_remote_retrieve_body($response);
+        }
 
-    $body    = json_decode($raw_body, true);
-    $records = $body['data'] ?? [];
-    if (!is_array($records)) {
-        wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'レコード形式不正: ' . $raw_body);
-        return $cache;
-    }
+        if ($status !== 200) {
+            wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'HTTPエラー: ' . $status . ' / ' . $raw_body);
+            break;
+        }
 
-    foreach ($records as $rec) {
-        $c = $rec['Code'] ?? null;
-        if ($c === null || $c === '') continue;
-        $cache[$c] = [
-            'sector33_code' => $rec['S33']   ?? null,
-            'sector33_name' => $rec['S33Nm'] ?? null,
-            'market_code'   => $rec['Mkt']   ?? null,
-            'market_name'   => $rec['MktNm'] ?? null,
-        ];
-    }
-    wp_stocks_log('info', 'jquants_equities_master', 'ALL', '全銘柄一覧を一括取得：' . count($cache) . '件');
+        $body    = json_decode($raw_body, true);
+        $records = $body['data'] ?? [];
+        if (!is_array($records)) {
+            wp_stocks_log('error', 'jquants_equities_master', 'ALL', 'レコード形式不正: ' . $raw_body);
+            break;
+        }
+
+        foreach ($records as $rec) {
+            $c = $rec['Code'] ?? null;
+            if ($c === null || $c === '') continue;
+            $cache[$c] = [
+                'sector33_code' => $rec['S33']   ?? null,
+                'sector33_name' => $rec['S33Nm'] ?? null,
+                'market_code'   => $rec['Mkt']   ?? null,
+                'market_name'   => $rec['MktNm'] ?? null,
+            ];
+        }
+        $total         += count($records);
+        $pagination_key = $body['pagination_key'] ?? null;
+    } while (!empty($pagination_key));
+
+    wp_stocks_log('info', 'jquants_equities_master', 'ALL', '全銘柄一覧を一括取得：' . $total . '件');
     return $cache;
 }
 
