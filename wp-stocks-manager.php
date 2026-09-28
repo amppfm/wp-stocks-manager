@@ -168,11 +168,15 @@ function wp_stocks_sector33_to_topix17($sector33) {
 
 // 実効セクター：手動設定（sector_override）＞ J-Quants公式33業種名 ＞ sector列（四季報抽出値）
 // 米国株は従来どおり sector 列のみを使う
+// 日本株は東証33業種名の正式表記（TOPIX-17対応表側）に揃えて返す（J-Quantsの「証券、商品先物取引業」→「証券・商品先物取引業」等の表記ゆれ対策）
+// 33業種名に解決できない値（四季報由来の独自表記など）はそのまま返す
 function wp_stocks_get_effective_sector($stock) {
     if (($stock->currency ?? 'JPY') === 'USD') return $stock->sector ?? '';
-    if (!empty($stock->sector_override))       return $stock->sector_override;
-    if (!empty($stock->jquants_sector33_name)) return $stock->jquants_sector33_name;
-    return $stock->sector ?? '';
+    if (!empty($stock->sector_override))       $raw = $stock->sector_override;
+    elseif (!empty($stock->jquants_sector33_name)) $raw = $stock->jquants_sector33_name;
+    else                                       $raw = $stock->sector ?? '';
+    if ($raw === '') return '';
+    return wp_stocks_resolve_sector33_name($raw) ?? $raw;
 }
 
 // --------------------------------------------------
@@ -479,10 +483,14 @@ function wp_stocks_get_sector_avg_per($sector, $is_usd, $exclude_stock_id = null
     $per_column         = $use_forward ? 'forward_per' : 'per';
     $currency_condition = $is_usd ? "currency = 'USD'" : "(currency = 'JPY' OR currency IS NULL OR currency = '')";
 
-    // 日本株は実効セクター（wp_stocks_get_effective_sector()と同じ優先順位）で比較する。米国株はsector列のみ
-    $sector_expr = $is_usd
-        ? 'sector'
-        : "COALESCE(NULLIF(sector_override,''), NULLIF(jquants_sector33_name,''), sector)";
+    // 日本株は実効セクター（wp_stocks_get_effective_sector()と同じ優先順位・同じ表記）で比較する。米国株はsector列のみ
+    // J-Quants名の読点表記（証券、商品先物取引業）は中黒に揃えて比較する
+    if ($is_usd) {
+        $sector_expr = 'sector';
+    } else {
+        $sector      = wp_stocks_resolve_sector33_name($sector) ?? $sector;
+        $sector_expr = "REPLACE(COALESCE(NULLIF(sector_override,''), NULLIF(jquants_sector33_name,''), sector), '、', '・')";
+    }
 
     $sql    = "SELECT AVG($per_column) FROM {$wpdb->prefix}stocks WHERE $sector_expr = %s AND $currency_condition AND $per_column > 0";
     $params = [$sector];
