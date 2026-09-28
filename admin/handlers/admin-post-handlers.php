@@ -435,8 +435,17 @@ add_action('admin_post_update_sector', function() {
     if ($id) {
         // 日本株は手動設定（sector_override）、米国株はsector列に保存する（実効セクターの優先順位に合わせる）
         $cur = $wpdb->get_var($wpdb->prepare("SELECT currency FROM {$wpdb->prefix}stocks WHERE id = %d", $id));
-        $col = ($cur === 'USD') ? 'sector' : 'sector_override';
-        $wpdb->update($wpdb->prefix . 'stocks', [$col => $sector], ['id' => $id]);
+        if ($cur === 'USD') {
+            $wpdb->update($wpdb->prefix . 'stocks', ['sector' => $sector], ['id' => $id]);
+        } else {
+            // 日本株：空欄（自動に戻す）か、東証33業種名に解決できる入力のみ保存する。誤入力は保存せずエラー表示
+            $resolved = ($sector === '') ? '' : wp_stocks_resolve_sector33_name($sector);
+            if ($resolved === null) {
+                wp_redirect(admin_url('admin.php?page=wp-stocks-manager&message=sector_invalid'));
+                exit;
+            }
+            $wpdb->update($wpdb->prefix . 'stocks', ['sector_override' => $resolved], ['id' => $id]);
+        }
     }
     wp_redirect(admin_url('admin.php?page=wp-stocks-manager&message=sector_saved'));
     exit;

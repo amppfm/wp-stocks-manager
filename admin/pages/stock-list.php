@@ -92,7 +92,7 @@ if (isset($_POST['wp_stocks_add'])) {
     }
 
     if (isset($_GET['message'])) {
-        $msgs = ['price_saved' => ['updated','株価を取得・保存しました。'], 'price_error' => ['error','株価の取得に失敗しました。'], 'info_saved' => ['updated','企業情報を更新しました。'], 'info_error' => ['error','企業情報の取得に失敗しました。'], 'name_saved' => ['updated','銘柄名を更新しました。'], 'sector_saved' => ['updated','セクターを更新しました。'], 'fin_saved' => ['updated','財務データを取得しました。'], 'fin_error' => ['error','財務データの取得に失敗しました。EDINETコードが見つからないか、APIキーを確認してください。'], 'code_saved' => ['updated','銘柄コードを更新しました。'], 'code_duplicate' => ['error','そのコードは既に別の銘柄で使用されています。'], 'code_error' => ['error','銘柄コードの更新に失敗しました。コードを入力してください。']];
+        $msgs = ['price_saved' => ['updated','株価を取得・保存しました。'], 'price_error' => ['error','株価の取得に失敗しました。'], 'info_saved' => ['updated','企業情報を更新しました。'], 'info_error' => ['error','企業情報の取得に失敗しました。'], 'name_saved' => ['updated','銘柄名を更新しました。'], 'sector_saved' => ['updated','セクターを更新しました。'], 'sector_invalid' => ['error','日本株の業種は東証33業種名（例：電気・ガス業）で入力してください。保存していません。'], 'fin_saved' => ['updated','財務データを取得しました。'], 'fin_error' => ['error','財務データの取得に失敗しました。EDINETコードが見つからないか、APIキーを確認してください。'], 'code_saved' => ['updated','銘柄コードを更新しました。'], 'code_duplicate' => ['error','そのコードは既に別の銘柄で使用されています。'], 'code_error' => ['error','銘柄コードの更新に失敗しました。コードを入力してください。']];
         if (isset($msgs[$_GET['message']])) { [$cls,$txt] = $msgs[$_GET['message']]; echo '<div class="' . $cls . '"><p>' . $txt . '</p></div>'; }
     }
 

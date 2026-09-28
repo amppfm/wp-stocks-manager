@@ -138,6 +138,21 @@ function wp_stocks_normalize_sector_name($name) {
     return $name;
 }
 
+// 入力文字列を東証33業種名の正式表記（TOPIX-17対応表側の表記）に解決する。該当なしは null
+// 全角/半角・読点/中黒などの表記ゆれは wp_stocks_normalize_sector_name() で吸収する
+function wp_stocks_resolve_sector33_name($input) {
+    static $canonical = null;
+    if ($canonical === null) {
+        $canonical = [];
+        foreach (wp_stocks_get_topix17_sector_map() as $info) {
+            foreach ($info['sectors'] as $s33) {
+                $canonical[wp_stocks_normalize_sector_name($s33)] = $s33;
+            }
+        }
+    }
+    return $canonical[wp_stocks_normalize_sector_name($input)] ?? null;
+}
+
 function wp_stocks_sector33_to_topix17($sector33) {
     static $reverse_map = null;
     if ($reverse_map === null) {
