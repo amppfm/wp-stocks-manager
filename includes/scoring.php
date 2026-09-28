@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) exit;
 // --------------------------------------------------
 function wp_stocks_calc_fair_price($stock) {
     $is_usd   = ($stock->currency ?? 'JPY') === 'USD';
-    $sector   = $stock->sector ?? '';
+    $sector   = wp_stocks_get_effective_sector($stock);
     $market   = $stock->market ?? '';
     $stock_id = $stock->id ?? null;
 
