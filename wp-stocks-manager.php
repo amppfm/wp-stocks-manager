@@ -149,6 +149,15 @@ function wp_stocks_sector33_to_topix17($sector33) {
     return $reverse_map[wp_stocks_normalize_sector_name($sector33)] ?? null;
 }
 
+// 実効セクター：手動設定（sector_override）＞ J-Quants公式33業種名 ＞ sector列（四季報抽出値）
+// 米国株は従来どおり sector 列のみを使う
+function wp_stocks_get_effective_sector($stock) {
+    if (($stock->currency ?? 'JPY') === 'USD') return $stock->sector ?? '';
+    if (!empty($stock->sector_override))       return $stock->sector_override;
+    if (!empty($stock->jquants_sector33_name)) return $stock->jquants_sector33_name;
+    return $stock->sector ?? '';
+}
+
 // --------------------------------------------------
 // TOPIX-17セクターETFの日次価格履歴を取得（stock_id => [['date','price','previous_close'], ...] 昇順）
 // マーケット情報ヒートマップの「カレンダー」「期間別」タブで使用

@@ -22,7 +22,8 @@ function wp_stocks_compare_page() {
     // セクターごとにグループ化（5つの選択欄で共通利用）
     $compare_stocks_by_sector = [];
     foreach ($all_stocks as $s) {
-        $sector_label = !empty($s->sector) ? wp_stocks_sector_ja($s->sector) : '未分類';
+        $eff_sector   = wp_stocks_get_effective_sector($s);
+        $sector_label = !empty($eff_sector) ? wp_stocks_sector_ja($eff_sector) : '未分類';
         $compare_stocks_by_sector[$sector_label][] = $s;
     }
     ksort($compare_stocks_by_sector);
@@ -82,7 +83,7 @@ function wp_stocks_compare_page() {
 
     // 比較テーブル
     $rows = [
-        ['セクター',     fn($s) => wp_stocks_sector_ja($s->sector ?? '-')],
+        ['セクター',     fn($s) => wp_stocks_sector_ja(wp_stocks_get_effective_sector($s) ?: '-')],
         ['現在株価',     fn($s) => ($prices[$s->id] ?? null) ? number_format($prices[$s->id]->price) . '円' : '-'],
         ['前日比',       fn($s) => ($prices[$s->id]->previous_close ?? 0) > 0 ? wp_stocks_change_html($prices[$s->id]->price, $prices[$s->id]->previous_close, ($s->currency ?? 'JPY') === 'USD') : '-'],
         ['トレンド',     fn($s) => wp_stocks_trend_icon_html($techs[$s->id] ?? null)],

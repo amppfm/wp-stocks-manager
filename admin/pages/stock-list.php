@@ -134,7 +134,7 @@ toggleShikihoField();
         $latest      = $wpdb->get_row($wpdb->prepare("SELECT price, previous_close, datetime FROM {$wpdb->prefix}stock_prices WHERE stock_id = %d ORDER BY datetime DESC LIMIT 1", $s->id));
         $price_str   = $latest ? number_format($latest->price) . '円 <small>(' . $latest->datetime . ')</small>' : '未取得';
         $change_html = ($latest && $latest->previous_close) ? wp_stocks_change_html($latest->price, $latest->previous_close, ($s->currency ?? 'JPY') === 'USD') : '-';
-        $market_info = trim(($s->market ?? '') . ' ' . ($s->sector ?? ''));
+        $market_info = trim(($s->market ?? '') . ' ' . wp_stocks_get_effective_sector($s));
         $info_date   = $s->info_updated_at ? date('Y/m/d', strtotime($s->info_updated_at)) : '未取得';
         $status_label = $s->status === 'portfolio' ? '<span style="background:#27ae60;color:#fff;padding:2px 6px;border-radius:3px;font-size:11px;">保有中</span>' : '<span style="background:#3498db;color:#fff;padding:2px 6px;border-radius:3px;font-size:11px;">ウォッチ</span>';
         $delete_url  = wp_nonce_url(admin_url('admin.php?page=wp-stocks-manager&delete=' . $s->id), 'wp_stocks_delete_' . $s->id);

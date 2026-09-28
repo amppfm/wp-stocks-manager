@@ -27,7 +27,8 @@ function wp_stocks_company_page() {
     // セクターごとにグループ化（プルダウンが長くなりすぎないように）
     $company_stocks_by_sector = [];
     foreach ($stocks as $s) {
-        $sector_label = !empty($s->sector) ? wp_stocks_sector_ja($s->sector) : '未分類';
+        $eff_sector   = wp_stocks_get_effective_sector($s);
+        $sector_label = !empty($eff_sector) ? wp_stocks_sector_ja($eff_sector) : '未分類';
         $company_stocks_by_sector[$sector_label][] = $s;
     }
     ksort($company_stocks_by_sector);
@@ -477,7 +478,7 @@ function wp_stocks_company_page() {
     // ① 詳細テーブル（業種・産業・ウェブサイト・時価総額・売上高・決算予定日・情報更新日）
     echo '<table class="widefat fixed" style="max-width:700px;margin-bottom:25px;"><tbody>';
     foreach ([
-        ['業種',       $stock->sector   ?? ''],
+        ['業種',       wp_stocks_get_effective_sector($stock)],
         ['産業',       $stock->industry ?? ''],
         ['ウェブサイト', $stock->website ?? ''],
         ['時価総額',   ($stock->market_cap ?? 0) ? number_format(intval($stock->market_cap) / 100000000) . '億円' : ''],
@@ -2216,7 +2217,7 @@ function wp_stocks_company_page() {
     // AI分析用テキスト生成
     echo '<h3>🤖 AI分析用テキスト生成</h3>';
     $analysis_text  = "【" . $stock->name . "（" . $stock->code . "）AI分析依頼】\n\n";
-    $analysis_text .= "■ 基本情報\n市場：" . ($stock->market ?: '東証') . "\n業種：" . ($stock->sector ?: '-') . " / " . ($stock->industry ?: '-') . "\n";
+    $analysis_text .= "■ 基本情報\n市場：" . ($stock->market ?: '東証') . "\n業種：" . (wp_stocks_get_effective_sector($stock) ?: '-') . " / " . ($stock->industry ?: '-') . "\n";
     if ($stock->market_cap > 0) $analysis_text .= "時価総額：" . number_format($stock->market_cap / 100000000) . "億円\n";
     if ($latest) {
         $analysis_text .= "現在株価：" . number_format($latest->price) . "円（" . $latest->datetime . "）\n";
@@ -2319,7 +2320,7 @@ function wp_stocks_company_page() {
         echo '<input type="hidden" name="stock_id" value="' . esc_attr($id) . '">';
         wp_nonce_field('wp_stocks_sector_override_nonce');
         echo '<select name="sector_override" style="margin-right:10px;">';
-        echo '<option value="">自動（四季報から取得：' . esc_html($stock->sector ?: '未設定') . '）</option>';
+        echo '<option value="">自動（J-Quants/四季報：' . esc_html(($stock->jquants_sector33_name ?? '') ?: ($stock->sector ?: '未設定')) . '）</option>';
         foreach (wp_stocks_get_topix17_sector_map() as $topix17_code => $topix17_info) {
             echo '<optgroup label="' . esc_attr($topix17_code . ' ' . $topix17_info['name']) . '">';
             foreach ($topix17_info['sectors'] as $s33) {

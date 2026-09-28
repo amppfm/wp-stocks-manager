@@ -168,7 +168,7 @@ function wp_stocks_importexport_page() {
         fwrite($out, "\xEF\xBB\xBF");
         fputcsv($out, ['コード','銘柄名','ステータス','セクター','業種','市場','PER','PBR','ROE','ROA','PEG','EPS','EPS予想','配当利回り','自己資本比率','利益率','売上成長率','利益成長率','時価総額','売上高','純利益','従業員数','平均取得単価','保有株数','テーマタグ','決算予定日','情報更新日']);
         foreach ($stocks as $s) {
-            fputcsv($out, [$s->code,$s->name,$s->status,$s->sector,$s->industry,$s->market,$s->per,$s->pbr,$s->roe,$s->roa,$s->peg,$s->eps,$s->forward_eps,$s->dividend_yield,$s->equity_ratio,$s->profit_margin,$s->revenue_growth,$s->earnings_growth,$s->market_cap,$s->revenue,$s->net_income,$s->employees,$s->purchase_price,$s->purchase_qty,$s->theme_tags,$s->earnings_date,$s->info_updated_at]);
+            fputcsv($out, [$s->code,$s->name,$s->status,wp_stocks_get_effective_sector($s),$s->industry,$s->market,$s->per,$s->pbr,$s->roe,$s->roa,$s->peg,$s->eps,$s->forward_eps,$s->dividend_yield,$s->equity_ratio,$s->profit_margin,$s->revenue_growth,$s->earnings_growth,$s->market_cap,$s->revenue,$s->net_income,$s->employees,$s->purchase_price,$s->purchase_qty,$s->theme_tags,$s->earnings_date,$s->info_updated_at]);
         }
         fclose($out); exit;
     }

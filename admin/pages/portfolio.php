@@ -181,7 +181,8 @@ function wp_stocks_portfolio_page() {
         $sector_values = [];
         foreach ($jp_rows as $row) {
             extract($row);
-            $sector = !empty($s->sector) ? wp_stocks_sector_ja($s->sector) : 'その他';
+            $eff_sector = wp_stocks_get_effective_sector($s);
+            $sector = !empty($eff_sector) ? wp_stocks_sector_ja($eff_sector) : 'その他';
             if (!isset($sector_values[$sector])) $sector_values[$sector] = 0;
             $sector_values[$sector] += $eval_value;
         }

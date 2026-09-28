@@ -60,15 +60,16 @@ function wp_stocks_dashboard_page() {
         $s->_judgment = $score_data['judgment'];
         $s->_is_usd   = ($s->currency ?? 'JPY') === 'USD';
 
+        $eff_sector = wp_stocks_get_effective_sector($s);
         if ($s->_is_usd) {
             $us_stocks[] = $s;
-            if (!empty($s->sector) && !isset($us_sectors[$s->sector])) {
-                $us_sectors[$s->sector] = wp_stocks_sector_ja($s->sector);
+            if (!empty($eff_sector) && !isset($us_sectors[$eff_sector])) {
+                $us_sectors[$eff_sector] = wp_stocks_sector_ja($eff_sector);
             }
         } else {
             $jp_stocks[] = $s;
-            if (!empty($s->sector) && !isset($sectors[$s->sector])) {
-                $sectors[$s->sector] = wp_stocks_sector_ja($s->sector);
+            if (!empty($eff_sector) && !isset($sectors[$eff_sector])) {
+                $sectors[$eff_sector] = wp_stocks_sector_ja($eff_sector);
             }
         }
         if (($s->per ?? 0) > 0 && !$s->_is_usd) { $per_sum += $s->per; $per_cnt++; }
@@ -111,7 +112,7 @@ function wp_stocks_dashboard_page() {
         $jp_filtered = array_values(array_filter($jp_filtered, fn($s) => intval($s->screen_shikiho ?? 0) === 1));
     }
     if ($sector_filter !== 'all') {
-        $jp_filtered = array_values(array_filter($jp_filtered, fn($s) => $s->sector === $sector_filter));
+        $jp_filtered = array_values(array_filter($jp_filtered, fn($s) => wp_stocks_get_effective_sector($s) === $sector_filter));
     }
     if ($keyword !== '') {
         $jp_filtered = array_values(array_filter($jp_filtered, function($s) use ($keyword) {
@@ -142,7 +143,7 @@ function wp_stocks_dashboard_page() {
         $us_filtered = array_values(array_filter($us_filtered, fn($s) => intval($s->screen_shikiho ?? 0) === 1));
     }
     if ($us_sector_filter !== 'all') {
-        $us_filtered = array_values(array_filter($us_filtered, fn($s) => $s->sector === $us_sector_filter));
+        $us_filtered = array_values(array_filter($us_filtered, fn($s) => wp_stocks_get_effective_sector($s) === $us_sector_filter));
     }
     if ($keyword !== '') {
         $us_filtered = array_values(array_filter($us_filtered, function($s) use ($keyword) {

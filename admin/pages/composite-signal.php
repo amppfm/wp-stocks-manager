@@ -402,7 +402,7 @@ function wp_stocks_composite_signal_page() {
             echo '<br><span style="font-size:10px;color:#e67e22;font-weight:bold;">&#x1F525; 根拠: ' . esc_html(implode('・', $composite_detail_arr)) . '</span>';
         }
         echo '</td>';
-        echo '<td>' . esc_html(!empty($s->sector) ? wp_stocks_sector_ja($s->sector) : '-') . '</td>';
+        echo '<td>' . esc_html(wp_stocks_get_effective_sector($s) !== '' ? wp_stocks_sector_ja(wp_stocks_get_effective_sector($s)) : '-') . '</td>';
         echo '<td>' . $price_str . '</td>';
         echo '<td>' . $change_html . '</td>';
         echo '<td>' . ($tech ? wp_stocks_trend_icon_html($tech) : '<span style="color:#aaa;">-</span>') . '</td>';

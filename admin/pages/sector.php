@@ -72,19 +72,8 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
     $pf_sectors = [];
     foreach ($stocks as $s) {
         $is_usd = ($s->currency ?? 'JPY') === 'USD';
-        if ($is_usd) {
-            $sector_key = !empty($s->sector) ? $s->sector : 'その他';
-        } else {
-            // 日本株：手動上書き（sector_override）＞ J-Quants公式33業種名 ＞ 四季報抽出値（sector列）の順
-            if (!empty($s->sector_override)) {
-                $effective_sector = $s->sector_override;
-            } elseif (!empty($s->jquants_sector33_name)) {
-                $effective_sector = $s->jquants_sector33_name;
-            } else {
-                $effective_sector = $s->sector ?? '';
-            }
-            $sector_key = !empty($effective_sector) ? $effective_sector : 'その他';
-        }
+        $sector_key = wp_stocks_get_effective_sector($s);
+        if ($sector_key === '') $sector_key = 'その他';
         $sector_ja  = wp_stocks_sector_ja($sector_key);
         $score_data = wp_stocks_calc_score($s);
         $tech       = $tech_map[$s->id] ?? null;
