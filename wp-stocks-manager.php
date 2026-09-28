@@ -132,6 +132,8 @@ function wp_stocks_get_topix17_sector_map() {
 function wp_stocks_normalize_sector_name($name) {
     $name = trim((string) $name);
     $name = mb_convert_kana($name, 'KV');
+    // J-Quants公式名「証券、商品先物取引業」の読点を、JPX業種別PERテーブル・TOPIX-17対応表の中黒表記に揃える
+    $name = str_replace('、', '・', $name);
     $name = str_replace(['･', '·', '‧'], '・', $name);
     return $name;
 }
@@ -462,7 +464,12 @@ function wp_stocks_get_sector_avg_per($sector, $is_usd, $exclude_stock_id = null
     $per_column         = $use_forward ? 'forward_per' : 'per';
     $currency_condition = $is_usd ? "currency = 'USD'" : "(currency = 'JPY' OR currency IS NULL OR currency = '')";
 
-    $sql    = "SELECT AVG($per_column) FROM {$wpdb->prefix}stocks WHERE sector = %s AND $currency_condition AND $per_column > 0";
+    // 日本株は実効セクター（wp_stocks_get_effective_sector()と同じ優先順位）で比較する。米国株はsector列のみ
+    $sector_expr = $is_usd
+        ? 'sector'
+        : "COALESCE(NULLIF(sector_override,''), NULLIF(jquants_sector33_name,''), sector)";
+
+    $sql    = "SELECT AVG($per_column) FROM {$wpdb->prefix}stocks WHERE $sector_expr = %s AND $currency_condition AND $per_column > 0";
     $params = [$sector];
     if ($exclude_stock_id !== null) {
         $sql     .= " AND id != %d";

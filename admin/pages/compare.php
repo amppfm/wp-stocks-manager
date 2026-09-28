@@ -16,7 +16,7 @@ function wp_stocks_compare_page() {
     global $wpdb;
     echo '<div class="wrap"><h1>📊 銘柄比較</h1>';
 
-    $all_stocks = $wpdb->get_results("SELECT id, code, name, sector FROM {$wpdb->prefix}stocks WHERE is_sector_etf = 0 ORDER BY sector ASC, code ASC");
+    $all_stocks = $wpdb->get_results("SELECT id, code, name, sector, currency, sector_override, jquants_sector33_name FROM {$wpdb->prefix}stocks WHERE is_sector_etf = 0 ORDER BY sector ASC, code ASC");
     if (!$all_stocks) { echo '<p>銘柄が登録されていません。</p></div>'; return; }
 
     // セクターごとにグループ化（5つの選択欄で共通利用）

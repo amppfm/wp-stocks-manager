@@ -433,7 +433,10 @@ add_action('admin_post_update_sector', function() {
     $id     = intval($_POST['stock_id']);
     $sector = sanitize_text_field($_POST['stock_sector']);
     if ($id) {
-        $wpdb->update($wpdb->prefix . 'stocks', ['sector' => $sector], ['id' => $id]);
+        // 日本株は手動設定（sector_override）、米国株はsector列に保存する（実効セクターの優先順位に合わせる）
+        $cur = $wpdb->get_var($wpdb->prepare("SELECT currency FROM {$wpdb->prefix}stocks WHERE id = %d", $id));
+        $col = ($cur === 'USD') ? 'sector' : 'sector_override';
+        $wpdb->update($wpdb->prefix . 'stocks', [$col => $sector], ['id' => $id]);
     }
     wp_redirect(admin_url('admin.php?page=wp-stocks-manager&message=sector_saved'));
     exit;

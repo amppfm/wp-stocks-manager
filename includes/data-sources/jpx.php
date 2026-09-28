@@ -272,6 +272,7 @@ function wp_stocks_jpx_sync_sector_per() {
 function wp_stocks_get_jpx_sector_per($sector, $market) {
     global $wpdb;
     if (empty($sector) || empty($market)) return null;
+    $sector = wp_stocks_normalize_sector_name($sector);
     $market_normalized = str_replace('市場', '', $market);
     $per = $wpdb->get_var($wpdb->prepare(
         "SELECT simple_per FROM {$wpdb->prefix}stock_jpx_sector_per

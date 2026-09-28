@@ -172,8 +172,13 @@ toggleShikihoField();
         $sector_form .= '<input type="hidden" name="action" value="update_sector">';
         $sector_form .= '<input type="hidden" name="stock_id" value="' . esc_attr($s->id) . '">';
         $sector_form .= wp_nonce_field('wp_stocks_sector_nonce', '_wpnonce', true, false);
-        $sector_form .= '<span id="sector-text-' . $s->id . '">' . esc_html($s->sector ?? '-') . '</span>';
-        $sector_form .= '<input type="text" name="stock_sector" value="' . esc_attr($s->sector ?? '') . '" style="width:120px;font-size:12px;padding:2px 6px;display:none;" class="sector-input-' . $s->id . '">';
+        $row_is_usd    = ($s->currency ?? 'JPY') === 'USD';
+        $row_eff       = wp_stocks_get_effective_sector($s);
+        // 日本株は手動設定（sector_override）を編集する（空欄で自動に戻る）。米国株はsector列を編集する
+        $row_edit_val  = $row_is_usd ? ($s->sector ?? '') : ($s->sector_override ?? '');
+        $row_placeholder = $row_is_usd ? '' : ('自動：' . ($row_eff !== '' ? $row_eff : '未設定'));
+        $sector_form .= '<span id="sector-text-' . $s->id . '">' . esc_html($row_eff !== '' ? $row_eff : '-') . '</span>';
+        $sector_form .= '<input type="text" name="stock_sector" value="' . esc_attr($row_edit_val) . '" placeholder="' . esc_attr($row_placeholder) . '" style="width:120px;font-size:12px;padding:2px 6px;display:none;" class="sector-input-' . $s->id . '">';
         $sector_form .= '<button type="button" class="button button-small" onclick="toggleSectorEdit(' . $s->id . ')" id="sector-edit-btn-' . $s->id . '">✏️</button>';
         $sector_form .= '<button type="submit" class="button button-small button-primary" style="display:none;" id="sector-save-btn-' . $s->id . '">保存</button>';
         $sector_form .= '<button type="button" class="button button-small" style="display:none;" id="sector-cancel-btn-' . $s->id . '" onclick="cancelSectorEdit(' . $s->id . ')">✕</button>';
