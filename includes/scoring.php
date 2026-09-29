@@ -17,20 +17,31 @@ function wp_stocks_calc_fair_price($stock) {
     $market   = $stock->market ?? '';
     $stock_id = $stock->id ?? null;
 
-    $result = ['actual' => null, 'forward' => null, 'sector_avg_per' => null, 'sector_avg_per_forward' => null];
+    // 実績EPSは、日本株はJ-Quants（jquants_eps）を優先し、無ければ従来のeps（Yahoo由来）にフォールバックする
+    $eps_actual = $is_usd ? ($stock->eps ?? 0) : (($stock->jquants_eps ?? 0) > 0 ? $stock->jquants_eps : ($stock->eps ?? 0));
 
-    if (($stock->eps ?? 0) > 0) {
+    $result = [
+        'actual' => null, 'forward' => null,
+        'sector_avg_per' => null, 'sector_avg_per_source' => null, 'sector_avg_per_count' => 0,
+        'sector_avg_per_forward' => null, 'sector_avg_per_forward_source' => null, 'sector_avg_per_forward_count' => 0,
+    ];
+
+    if ($eps_actual > 0) {
         $avg_per = wp_stocks_get_sector_avg_per($sector, $is_usd, $stock_id, false, $market);
-        if ($avg_per !== null) {
-            $result['actual']         = $stock->eps * $avg_per;
-            $result['sector_avg_per'] = $avg_per;
+        if ($avg_per['value'] !== null) {
+            $result['actual']                = $eps_actual * $avg_per['value'];
+            $result['sector_avg_per']        = $avg_per['value'];
+            $result['sector_avg_per_source'] = $avg_per['source'];
+            $result['sector_avg_per_count']  = $avg_per['count'];
         }
     }
     if (($stock->forward_eps ?? 0) > 0) {
         $avg_per_fwd = wp_stocks_get_sector_avg_per($sector, $is_usd, $stock_id, true, $market);
-        if ($avg_per_fwd !== null) {
-            $result['forward']                = $stock->forward_eps * $avg_per_fwd;
-            $result['sector_avg_per_forward']  = $avg_per_fwd;
+        if ($avg_per_fwd['value'] !== null) {
+            $result['forward']                        = $stock->forward_eps * $avg_per_fwd['value'];
+            $result['sector_avg_per_forward']         = $avg_per_fwd['value'];
+            $result['sector_avg_per_forward_source']  = $avg_per_fwd['source'];
+            $result['sector_avg_per_forward_count']   = $avg_per_fwd['count'];
         }
     }
     return $result;

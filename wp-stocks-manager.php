@@ -469,17 +469,25 @@ function wp_stocks_get_company_info($symbol) {
 // 適正株価計算用: 同一セクター・同一通貨圏の平均PER（自分自身は除外）
 // セクターが空、または比較対象が1件も無い場合は null を返す
 // --------------------------------------------------
+// 戻り値: ['value' => 平均PER or null, 'source' => 'jpx_official'|'registered_avg'|null, 'count' => 平均に使った登録銘柄数]
+// - 実績PER（$use_forward=false）は、JPX公式の業種別PERを優先する
+// - 予想PER（$use_forward=true）は、登録銘柄の平均が3件以上あればそちらを採用し、3件未満ならJPX公式の実績業種平均PERで代用する
+//   （JPXは予想PERを公式には出していないため、代用である旨をsourceで区別できるようにする）
+// - 登録銘柄平均はPER>60の銘柄を外れ値として除外する
 function wp_stocks_get_sector_avg_per($sector, $is_usd, $exclude_stock_id = null, $use_forward = false, $market = null) {
     global $wpdb;
-    if (empty($sector)) return null;
+    if (empty($sector)) return ['value' => null, 'source' => null, 'count' => 0];
 
-    // 日本株・実績PERベースで市場区分が分かっている場合は、JPX公式の業種別PERを優先する
-    if (!$is_usd && !$use_forward && !empty($market)) {
+    $jpx_per = null;
+    if (!$is_usd && !empty($market)) {
         $jpx_per = wp_stocks_get_jpx_sector_per($sector, $market);
-        if ($jpx_per !== null) return $jpx_per;
+    }
+    // 実績PERは、これまで通りJPX公式を最優先する
+    if (!$is_usd && !$use_forward && $jpx_per !== null) {
+        return ['value' => $jpx_per, 'source' => 'jpx_official', 'count' => 0];
     }
 
-    // フォールバック: 登録銘柄同士の平均PER（従来ロジック。予想PER・米国株・市場区分未設定はこちら）
+    // 登録銘柄同士の平均PER（予想PER・米国株・市場区分未設定・JPX公式が無い実績PERはこちら）
     $per_column         = $use_forward ? 'forward_per' : 'per';
     $currency_condition = $is_usd ? "currency = 'USD'" : "(currency = 'JPY' OR currency IS NULL OR currency = '')";
 
@@ -492,14 +500,23 @@ function wp_stocks_get_sector_avg_per($sector, $is_usd, $exclude_stock_id = null
         $sector_expr = "REPLACE(COALESCE(NULLIF(sector_override,''), NULLIF(jquants_sector33_name,''), sector), '、', '・')";
     }
 
-    $sql    = "SELECT AVG($per_column) FROM {$wpdb->prefix}stocks WHERE $sector_expr = %s AND $currency_condition AND $per_column > 0";
+    $sql    = "SELECT AVG($per_column) AS avg_per, COUNT(*) AS cnt FROM {$wpdb->prefix}stocks WHERE $sector_expr = %s AND $currency_condition AND $per_column > 0 AND $per_column <= 60";
     $params = [$sector];
     if ($exclude_stock_id !== null) {
         $sql     .= " AND id != %d";
         $params[] = $exclude_stock_id;
     }
-    $avg = $wpdb->get_var($wpdb->prepare($sql, ...$params));
-    return $avg !== null ? floatval($avg) : null;
+    $row   = $wpdb->get_row($wpdb->prepare($sql, ...$params));
+    $count = $row ? intval($row->cnt) : 0;
+
+    // 予想PERは、登録銘柄が3件以上あればそちらを採用。3件未満ならJPX公式の実績業種平均PERで代用する
+    if ($use_forward && $count < 3) {
+        if ($jpx_per !== null) return ['value' => $jpx_per, 'source' => 'jpx_official_fallback', 'count' => $count];
+        return ['value' => null, 'source' => null, 'count' => $count];
+    }
+
+    if ($count === 0 || $row->avg_per === null) return ['value' => null, 'source' => null, 'count' => 0];
+    return ['value' => floatval($row->avg_per), 'source' => 'registered_avg', 'count' => $count];
 }
 
 // --------------------------------------------------

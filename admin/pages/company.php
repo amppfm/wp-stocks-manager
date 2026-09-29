@@ -150,17 +150,28 @@ function wp_stocks_company_page() {
         $usd_jpy_banner = $is_usd ? wp_stocks_get_usd_jpy() : 1;
         $fp_data  = wp_stocks_calc_fair_price($stock);
         $fp_parts = [];
+        // セクター平均PERの採用元を、表示用の一言に変換する
+        $fp_source_label = function($source, $count) {
+            switch ($source) {
+                case 'jpx_official':          return 'JPX公式実績値';
+                case 'jpx_official_fallback': return 'JPX公式実績値で代用（登録' . $count . '銘柄では不足）';
+                case 'registered_avg':        return '自社登録' . $count . '銘柄平均';
+                default:                      return '';
+            }
+        };
         if ($fp_data['actual'] !== null) {
             $fp_val = $fp_data['actual'];
+            $fp_src = $fp_source_label($fp_data['sector_avg_per_source'], $fp_data['sector_avg_per_count']);
             $fp_parts[] = '実績：' . ($is_usd
                 ? '$' . number_format($fp_val, 2) . '(≈' . number_format($fp_val * $usd_jpy_banner) . '円)'
-                : number_format($fp_val, 0) . '円') . '（セクター平均PER' . number_format($fp_data['sector_avg_per'], 1) . '倍基準）';
+                : number_format($fp_val, 0) . '円') . '（セクター平均PER' . number_format($fp_data['sector_avg_per'], 1) . '倍基準・' . $fp_src . '）';
         }
         if ($fp_data['forward'] !== null) {
             $fp_fwd = $fp_data['forward'];
+            $fp_src = $fp_source_label($fp_data['sector_avg_per_forward_source'], $fp_data['sector_avg_per_forward_count']);
             $fp_parts[] = '予想：' . ($is_usd
                 ? '$' . number_format($fp_fwd, 2) . '(≈' . number_format($fp_fwd * $usd_jpy_banner) . '円)'
-                : number_format($fp_fwd, 0) . '円') . '（セクター平均PER' . number_format($fp_data['sector_avg_per_forward'], 1) . '倍基準）';
+                : number_format($fp_fwd, 0) . '円') . '（セクター平均PER' . number_format($fp_data['sector_avg_per_forward'], 1) . '倍基準・' . $fp_src . '）';
         }
         if (!empty($fp_parts)) {
             echo '<div style="font-size:12px;color:#e67e22;border-left:2px solid #e67e22;padding-left:8px;">'
