@@ -106,8 +106,20 @@ function wp_stocks_jquants_get_fins_summary_from_records($records) {
     // UI側で「予想未発表のため実績EPS表示中」等、明示的にラベルを分けて表示する。
     $forecast_eps = $clean($latest['FEPS'] ?? null);
 
+    // ★2026-09-30変更：実績EPS（EPS）は「期首からの累計値」であり、四半期開示（1Q/2Q/3Q）では
+    // 年間の途中までの累計にすぎない。直近の開示が本決算(FY)とは限らないため、$latestの値を
+    // そのまま使うと、会社によって「四半期累計」と「年間実績」が混在してしまう。
+    // ROEと同じ考え方で、直近のFY開示レコードから取得する。
+    $latest_fy_eps = null;
+    foreach ($records as $r) {
+        if (($r['CurPerType'] ?? '') === 'FY' && isset($r['EPS']) && $r['EPS'] !== '') {
+            $latest_fy_eps = $r['EPS'];
+            break;
+        }
+    }
+
     return [
-        'eps'                      => $clean($latest['EPS'] ?? null),
+        'eps'                      => $clean($latest_fy_eps),
         'forecast_eps'             => $forecast_eps,
         'next_fy_forecast_eps'     => $clean($latest['NxFEPS'] ?? null),
         'bps'                      => $clean($latest['BPS'] ?? null),
