@@ -164,9 +164,12 @@ function wp_stocks_company_page() {
         if ($fp_data['actual'] !== null) {
             $fp_val = $fp_data['actual'];
             $fp_src = $fp_source_label($fp_data['sector_avg_per_source'], $fp_data['sector_avg_per_count']);
+            // 実績EPSが株式分割の疑いによりYahoo側へフォールバックした場合は、その旨を明記する
+            $fp_eps_note = ($fp_data['eps_actual_source'] === 'yahoo_split_suspected')
+                ? '・EPSは株式分割の疑いによりYahoo実績値を使用' : '';
             $fp_parts[] = '実績：' . ($is_usd
                 ? '$' . number_format($fp_val, 2) . '(≈' . number_format($fp_val * $usd_jpy_banner) . '円)'
-                : number_format($fp_val, 0) . '円') . '（セクター平均PER' . number_format($fp_data['sector_avg_per'], 1) . '倍基準・' . $fp_src . '）';
+                : number_format($fp_val, 0) . '円') . '（セクター平均PER' . number_format($fp_data['sector_avg_per'], 1) . '倍基準・' . $fp_src . $fp_eps_note . '）';
         }
         if ($fp_data['forward'] !== null) {
             $fp_fwd = $fp_data['forward'];
@@ -209,9 +212,10 @@ function wp_stocks_company_page() {
 
     // ===================== タブUI =====================
     $active_tab = sanitize_text_field($_GET['ctab'] ?? 'info');
-    if (!in_array($active_tab, ['info','chart','finance','oscillator','news','ai','edit'])) $active_tab = 'info';
+    if (!in_array($active_tab, ['info','shikiho','chart','finance','oscillator','news','ai','edit'])) $active_tab = 'info';
     $tab_defs = [
         'info'       => '&#x1F4CB; 基本情報',
+        'shikiho'    => '&#x1F4D6; 四季報',
         'chart'      => '&#x1F4CA; チャート',
         'finance'    => '&#x1F4B0; 財務',
         'oscillator' => '&#x1F4C8; テクニカル分析', // ★変更：「オシレータ分析」から改称（内部のctabキーはoscillatorのまま）
@@ -484,6 +488,23 @@ function wp_stocks_company_page() {
         echo '</div>';
     }
 
+    // ===== 四季報タブ =====
+    if ($active_tab === 'shikiho') {
+        echo '<div id="tab-shikiho">';
+        if (!$is_usd && !empty($stock->shikiho)) {
+            $updated = $stock->shikiho_updated_at ? date('Y/m/d H:i', strtotime($stock->shikiho_updated_at)) : '';
+            echo '<div style="background:#fffef0;border:1px solid #e8d44d;border-radius:8px;padding:16px;margin-bottom:15px;">';
+            if ($updated) echo '<div style="font-size:11px;color:#888;margin-bottom:8px;">更新日：' . esc_html($updated) . '</div>';
+            echo '<pre style="white-space:pre-wrap;word-wrap:break-word;font-family:inherit;font-size:13px;line-height:1.8;margin:0;">' . esc_html($stock->shikiho) . '</pre>';
+            echo '</div>';
+        } else {
+            echo '<p style="color:#888;">四季報情報が未入力です。「編集」タブから貼り付けて保存してください。</p>';
+        }
+        $shikiho_edit_url = add_query_arg(['ctab' => 'edit'], admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id));
+        echo '<p><a href="' . esc_url($shikiho_edit_url) . '" class="button">&#x270F;&#xFE0F; 四季報を編集する</a></p>';
+        echo '</div>';
+    }
+
     // ===== 基本情報タブ =====
     if ($active_tab === 'info') {
     echo '<div id="tab-info">';
@@ -506,16 +527,7 @@ function wp_stocks_company_page() {
         echo '</tr>';
     }
     echo '</tbody></table>';
-    // 四季報情報（表示のみ・入力は編集タブへ）
-    if (!$is_usd && !empty($stock->shikiho)) {
-        echo '<h3>&#x1F4D6; 四季報情報</h3>';
-        $updated = $stock->shikiho_updated_at ? date('Y/m/d H:i', strtotime($stock->shikiho_updated_at)) : '';
-        echo '<div style="background:#fffef0;border:1px solid #e8d44d;border-radius:8px;padding:16px;margin-bottom:25px;">';
-        if ($updated) echo '<div style="font-size:11px;color:#888;margin-bottom:8px;">更新日：' . esc_html($updated) . '</div>';
-        echo '<pre style="white-space:pre-wrap;word-wrap:break-word;font-family:inherit;font-size:13px;line-height:1.8;margin:0;">' . esc_html($stock->shikiho) . '</pre>';
-        echo '</div>';
-    }
-    
+
     // ② 財務スコアカード（指標・値・点数・評価の4列）
     echo '<h3>財務スコアカード</h3>';
     $score_result = wp_stocks_calc_score($stock);
