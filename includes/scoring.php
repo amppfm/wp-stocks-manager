@@ -17,11 +17,32 @@ function wp_stocks_calc_fair_price($stock) {
     $market   = $stock->market ?? '';
     $stock_id = $stock->id ?? null;
 
-    // 実績EPSは、日本株はJ-Quants（jquants_eps）を優先し、無ければ従来のeps（Yahoo由来）にフォールバックする
-    $eps_actual = $is_usd ? ($stock->eps ?? 0) : (($stock->jquants_eps ?? 0) > 0 ? $stock->jquants_eps : ($stock->eps ?? 0));
+    // 実績EPSは、日本株はJ-Quants（jquants_eps）を優先し、無ければ従来のeps（Yahoo由来）にフォールバックする。
+    // ただし、J-Quantsの実績EPSは開示当時の株数ベースの値であり、その後に株式分割を行った銘柄では
+    // 遡及調整されない（Yahoo側は現在の株数換算に調整済み）ため、分割比率倍に見えてしまうことがある。
+    // Yahoo実績EPSとの倍率が0.5〜2倍の範囲を外れる場合は、分割等の疑いありとみなしYahoo側を採用する
+    // （分割後、次の本決算が新株数ベースで開示されれば、この乖離は自然に解消しJ-Quants側に戻る）。
+    $yahoo_eps_actual  = $stock->eps ?? 0;
+    $jquants_eps_actual = $stock->jquants_eps ?? 0;
+    if ($is_usd) {
+        $eps_actual        = $yahoo_eps_actual;
+        $eps_actual_source = 'yahoo';
+    } elseif ($jquants_eps_actual > 0) {
+        $eps_ratio = $yahoo_eps_actual > 0 ? ($jquants_eps_actual / $yahoo_eps_actual) : null;
+        if ($eps_ratio !== null && ($eps_ratio < 0.5 || $eps_ratio > 2.0)) {
+            $eps_actual        = $yahoo_eps_actual;
+            $eps_actual_source = 'yahoo_split_suspected';
+        } else {
+            $eps_actual        = $jquants_eps_actual;
+            $eps_actual_source = 'jquants';
+        }
+    } else {
+        $eps_actual        = $yahoo_eps_actual;
+        $eps_actual_source = 'yahoo';
+    }
 
     $result = [
-        'actual' => null, 'forward' => null,
+        'actual' => null, 'forward' => null, 'eps_actual_source' => $eps_actual_source,
         'sector_avg_per' => null, 'sector_avg_per_source' => null, 'sector_avg_per_count' => 0,
         'sector_avg_per_forward' => null, 'sector_avg_per_forward_source' => null, 'sector_avg_per_forward_count' => 0,
     ];
