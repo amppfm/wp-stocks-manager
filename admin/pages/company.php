@@ -70,6 +70,8 @@ function wp_stocks_company_page() {
         if ($m === 'ai_saved')   echo '<div class="updated"><p>AI分析結果を履歴に保存しました。</p></div>';
         if ($m === 'ai_deleted') echo '<div class="updated"><p>AI分析履歴を削除しました。</p></div>';
         if ($m === 'info_saved') echo '<div class="updated"><p>企業情報を更新しました。</p></div>';
+        if ($m === 'jquants_sync_saved') echo '<div class="updated"><p>J-Quantsから財務スコアカード・株価指標を更新しました。</p></div>';
+        if ($m === 'jquants_sync_error') echo '<div class="error"><p>J-Quantsからの取得に失敗しました。ログを確認してください。</p></div>';
         if ($m === 'info_error') echo '<div class="error"><p>企業情報の取得に失敗しました。</p></div>';
         if ($m === 'news_saved') echo '<div class="updated"><p>適時開示を取得・保存しました。</p></div>';
         if ($m === 'news_error') echo '<div class="error"><p>適時開示の取得に失敗しました。</p></div>';
@@ -629,6 +631,16 @@ function wp_stocks_company_page() {
         echo '</div>';
     }
     echo '</div>';
+
+    // J-Quants財務データの手動更新ボタン（日本株のみ）
+    // ※上の財務スコアカード・株価指標・業績指標は、jquants_eps/jquants_roe等のJ-Quants由来列を
+    //   使っている項目があるが、これらは従来「週次Cron」でしか更新されず、個別銘柄で単発更新する
+    //   手段が無かった。「Yahoo!ファイナンスから企業情報を再取得」ボタンはYahoo側の値しか更新しない。
+    if (!$is_usd) {
+        $jq_sync_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_jquants_sync_stock&id=' . $id), 'wp_stocks_jquants_sync_' . $id);
+        echo '<p style="margin-top:10px;"><a href="' . esc_url($jq_sync_url) . '" class="button">&#x1F504; J-Quantsから財務スコアカード・株価指標を更新</a></p>';
+        echo '<p class="description">EPS・ROE・自己資本比率・業種等のJ-Quants由来データを最新化します（通常は週次Cronで自動更新されますが、ここから単独で即時実行できます）。</p>';
+    }
 
     echo '</div>'; // tab-info
     } // end info tab

@@ -648,6 +648,18 @@ add_action('admin_post_fetch_quarterly_financials_edgar', function() {
     wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $stock_id . '&ctab=finance&ftab=quarterly&message=' . ($result ? 'fin_saved' : 'fin_error')));
     exit;
 });
+add_action('admin_post_wp_stocks_jquants_sync_stock', function() {
+    $id = intval($_GET['id'] ?? 0);
+    wp_stocks_require_admin_action('wp_stocks_jquants_sync_' . $id);
+    global $wpdb;
+    $stock = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}stocks WHERE id = %d", $id));
+    if (!$stock) wp_die('銘柄が見つかりません');
+    if (($stock->currency ?? 'JPY') === 'USD') wp_die('この機能は日本株専用です');
+    $result = wp_stocks_jquants_sync_stock($id, $stock->code);
+    wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id . '&message=' . ($result ? 'jquants_sync_saved' : 'jquants_sync_error')));
+    exit;
+});
+
 add_action('admin_post_fetch_quarterly_financials_jquants', function() {
     $stock_id = intval($_GET['stock_id'] ?? 0);
     wp_stocks_require_admin_action('wp_stocks_fetch_qfin_jquants_' . $stock_id);
