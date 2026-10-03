@@ -627,11 +627,13 @@ function wp_stocks_company_page() {
     // ③ 株価指標カード
     echo '<h3>株価指標</h3>';
     echo '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;">';
+    // EPS（実績）は、適正株価・財務スコアと同じ実効値（J-Quants優先、分割疑い時はYahoo代用）を表示する
+    $eps_actual_info_for_display = wp_stocks_get_effective_eps_actual($stock);
     $cards = [
         ['PER（実績）', ($stock->per ?? 0) > 0 ? number_format($stock->per, 1) . '倍' : 'N/A', $per_color, 'PER<15で割安'],
         ['PER（予想）', ($stock->forward_per ?? 0) > 0 ? number_format($stock->forward_per, 1) . '倍' : 'N/A', $per_color, '来期予想PER'],
         ['PBR',         ($stock->pbr ?? 0) > 0 ? number_format($stock->pbr, 2) . '倍' : 'N/A', $pbr_color, 'PBR<1で割安'],
-        ['EPS（実績）', ($stock->eps ?? 0) != 0 ? number_format($stock->eps, 1) . '円' : 'N/A', '#555', '1株当たり利益'],
+        ['EPS（実績）', ($eps_actual_info_for_display['value'] ?? 0) != 0 ? number_format($eps_actual_info_for_display['value'], 1) . '円' . ($eps_actual_info_for_display['source'] === 'yahoo_split_suspected' ? '（分割疑いによりYahoo値）' : '') : 'N/A', '#555', '1株当たり利益（J-Quants優先、無ければYahoo）'],
         ['EPS（予想）', ($stock->forward_eps ?? 0) != 0 ? number_format($stock->forward_eps, 1) . '円' : 'N/A', '#555', '来期予想EPS'],
         ['ROE',         ($stock->roe ?? 0) != 0 ? number_format($stock->roe, 1) . '%' : 'N/A', $roe_color, 'ROE>=15%が優良'],
         ['ROA',         ($stock->roa ?? 0) != 0 ? number_format($stock->roa, 1) . '%' : 'N/A', '#555', '総資産利益率'],
@@ -2296,7 +2298,8 @@ function wp_stocks_company_page() {
     if ($stock->per > 0)            $analysis_text .= "PER（実績）：" . number_format($stock->per, 1) . "倍\n";
     if ($stock->forward_per > 0)    $analysis_text .= "PER（予想）：" . number_format($stock->forward_per, 1) . "倍\n";
     if ($stock->pbr > 0)            $analysis_text .= "PBR：" . number_format($stock->pbr, 2) . "倍\n";
-    if ($stock->eps != 0)           $analysis_text .= "EPS（実績）：" . number_format($stock->eps, 1) . "円\n";
+    $ai_eps_actual_info = wp_stocks_get_effective_eps_actual($stock);
+    if (($ai_eps_actual_info['value'] ?? 0) != 0) $analysis_text .= "EPS（実績）：" . number_format($ai_eps_actual_info['value'], 1) . "円\n";
     if ($stock->forward_eps != 0)   $analysis_text .= "EPS（予想）：" . number_format($stock->forward_eps, 1) . "円\n";
     if ($stock->roe != 0)           $analysis_text .= "ROE：" . number_format($stock->roe, 1) . "%\n";
     if ($stock->roa != 0)           $analysis_text .= "ROA：" . number_format($stock->roa, 1) . "%\n";

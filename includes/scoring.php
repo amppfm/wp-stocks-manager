@@ -7,6 +7,32 @@
 if (!defined('ABSPATH')) exit;
 
 // --------------------------------------------------
+// 実効実績EPSの判定（適正株価・財務スコア・株価指標カードで共通利用）
+// 日本株はJ-Quants（jquants_eps）を優先し、無ければ従来のeps（Yahoo由来）にフォールバックする。
+// ただし、J-Quantsの実績EPSは開示当時の株数ベースの値であり、その後に株式分割を行った銘柄では
+// 遡及調整されない（Yahoo側は現在の株数換算に調整済み）ため、分割比率倍に見えてしまうことがある。
+// Yahoo実績EPSとの倍率が0.5〜2倍の範囲を外れる場合は、分割等の疑いありとみなしYahoo側を採用する
+// （分割後、次の本決算が新株数ベースで開示されれば、この乖離は自然に解消しJ-Quants側に戻る）。
+// 戻り値: ['value' => 実効実績EPS, 'source' => 'jquants'|'yahoo'|'yahoo_split_suspected']
+// --------------------------------------------------
+function wp_stocks_get_effective_eps_actual($stock) {
+    $is_usd             = ($stock->currency ?? 'JPY') === 'USD';
+    $yahoo_eps_actual   = $stock->eps ?? 0;
+    $jquants_eps_actual = $stock->jquants_eps ?? 0;
+    if ($is_usd) {
+        return ['value' => $yahoo_eps_actual, 'source' => 'yahoo'];
+    }
+    if ($jquants_eps_actual > 0) {
+        $eps_ratio = $yahoo_eps_actual > 0 ? ($jquants_eps_actual / $yahoo_eps_actual) : null;
+        if ($eps_ratio !== null && ($eps_ratio < 0.5 || $eps_ratio > 2.0)) {
+            return ['value' => $yahoo_eps_actual, 'source' => 'yahoo_split_suspected'];
+        }
+        return ['value' => $jquants_eps_actual, 'source' => 'jquants'];
+    }
+    return ['value' => $yahoo_eps_actual, 'source' => 'yahoo'];
+}
+
+// --------------------------------------------------
 // 適正株価計算: EPS × セクター平均PER（自社PERは使わないため循環参照なし）
 // 戻り値: ['actual' => 実績ベース適正株価 or null, 'forward' => 予想ベース適正株価 or null,
 //          'sector_avg_per' => 実績ベースの基準PER or null, 'sector_avg_per_forward' => 予想ベースの基準PER or null]
@@ -17,29 +43,9 @@ function wp_stocks_calc_fair_price($stock) {
     $market   = $stock->market ?? '';
     $stock_id = $stock->id ?? null;
 
-    // 実績EPSは、日本株はJ-Quants（jquants_eps）を優先し、無ければ従来のeps（Yahoo由来）にフォールバックする。
-    // ただし、J-Quantsの実績EPSは開示当時の株数ベースの値であり、その後に株式分割を行った銘柄では
-    // 遡及調整されない（Yahoo側は現在の株数換算に調整済み）ため、分割比率倍に見えてしまうことがある。
-    // Yahoo実績EPSとの倍率が0.5〜2倍の範囲を外れる場合は、分割等の疑いありとみなしYahoo側を採用する
-    // （分割後、次の本決算が新株数ベースで開示されれば、この乖離は自然に解消しJ-Quants側に戻る）。
-    $yahoo_eps_actual  = $stock->eps ?? 0;
-    $jquants_eps_actual = $stock->jquants_eps ?? 0;
-    if ($is_usd) {
-        $eps_actual        = $yahoo_eps_actual;
-        $eps_actual_source = 'yahoo';
-    } elseif ($jquants_eps_actual > 0) {
-        $eps_ratio = $yahoo_eps_actual > 0 ? ($jquants_eps_actual / $yahoo_eps_actual) : null;
-        if ($eps_ratio !== null && ($eps_ratio < 0.5 || $eps_ratio > 2.0)) {
-            $eps_actual        = $yahoo_eps_actual;
-            $eps_actual_source = 'yahoo_split_suspected';
-        } else {
-            $eps_actual        = $jquants_eps_actual;
-            $eps_actual_source = 'jquants';
-        }
-    } else {
-        $eps_actual        = $yahoo_eps_actual;
-        $eps_actual_source = 'yahoo';
-    }
+    $eps_info          = wp_stocks_get_effective_eps_actual($stock);
+    $eps_actual        = $eps_info['value'];
+    $eps_actual_source = $eps_info['source'];
 
     $result = [
         'actual' => null, 'forward' => null, 'eps_actual_source' => $eps_actual_source,
@@ -227,12 +233,11 @@ function wp_stocks_calc_score_jp($stock) {
         $add('成長', '営業利益成長率', 5, null, 'N/A');
     }
 
-    // 会社予想の増益率（予想EPS÷実績EPS）。実績EPSが株式分割の疑いで乖離している場合はN/A扱いにする
-    $eps_fy_actual = floatval($stock->jquants_eps ?? 0);
-    $yahoo_eps     = floatval($stock->eps ?? 0);
-    $feps          = floatval($stock->jquants_forecast_eps ?? 0);
-    $eps_ratio_ok  = ($yahoo_eps <= 0 || $eps_fy_actual <= 0) ? true : (($eps_fy_actual / $yahoo_eps) >= 0.5 && ($eps_fy_actual / $yahoo_eps) <= 2.0);
-    if ($eps_fy_actual > 0 && $feps > 0 && $eps_ratio_ok) {
+    // 会社予想の増益率（予想EPS÷実効実績EPS）。実績EPSが株式分割の疑いで乖離している場合はN/A扱いにする
+    $eps_actual_info = wp_stocks_get_effective_eps_actual($stock);
+    $eps_fy_actual   = $eps_actual_info['source'] === 'jquants' ? $eps_actual_info['value'] : 0; // 分割疑い・Yahoo代用時は予想成長率を計算しない
+    $feps            = floatval($stock->jquants_forecast_eps ?? 0);
+    if ($eps_fy_actual > 0 && $feps > 0) {
         $f_growth = ($feps - $eps_fy_actual) / $eps_fy_actual * 100;
         if     ($f_growth >= 10) { $pts = 5; $ev = '増益予想'; }
         elseif ($f_growth >= 0)  { $pts = 3; $ev = '横ばい予想'; }
@@ -273,7 +278,8 @@ function wp_stocks_calc_score_jp($stock) {
         elseif ($payout > 80) {
             $pts = 0; $ev = '過大';
             $flags[] = ['label' => '配当性向過大（' . number_format($payout, 1) . '%）', 'penalty' => -7, '重さ' => '中度'];
-        } else { $pts = 3; $ev = '許容範囲'; }
+        } elseif ($payout < 10) { $pts = 3; $ev = '内部留保型（低配当性向）'; }
+        else                    { $pts = 3; $ev = '許容範囲'; }
         $add('安全性', '配当性向', 5, $pts, $ev, number_format($payout, 1) . '%');
     } else {
         $add('安全性', '配当性向', 5, null, 'N/A');
