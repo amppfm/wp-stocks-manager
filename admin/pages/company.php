@@ -535,7 +535,6 @@ function wp_stocks_company_page() {
     $sc_judgment  = $score_result['judgment'];
     $sc_detail    = $score_result['detail'];
 
-    // 指標ごとの実際の値
     // 適正株価計算（EPS × セクター平均PER。自社PERは使わないため循環参照なし）
     $is_usd_stock = ($stock->currency ?? 'JPY') === 'USD';
     $fp_data                            = wp_stocks_calc_fair_price($stock);
@@ -544,36 +543,58 @@ function wp_stocks_company_page() {
     $fair_price_sector_avg_per          = $fp_data['sector_avg_per'];
     $fair_price_sector_avg_per_forward  = $fp_data['sector_avg_per_forward'];
 
-    $sc_values = [
-        'PER'       => ($stock->per ?? 0) > 0 ? number_format($stock->per, 1) . '倍' : 'N/A',
-        'PBR'       => ($stock->pbr ?? 0) > 0 ? number_format($stock->pbr, 2) . '倍' : 'N/A',
-        'ROE'       => ($stock->roe ?? 0) != 0 ? number_format($stock->roe, 1) . '%' : 'N/A',
+    // ★2026-09-30変更：v2（日本株）は軸・値を$sc_detail自体に持つため、別出しの$sc_valuesは廃止。
+    // 米国株（v1）は従来どおり$d['値']を持たないため、ここで個別に値を補完する。
+    $sc_values_us_fallback = [
+        'PER' => ($stock->per ?? 0) > 0 ? number_format($stock->per, 1) . '倍' : 'N/A',
+        'PBR' => ($stock->pbr ?? 0) > 0 ? number_format($stock->pbr, 2) . '倍' : 'N/A',
+        'ROE' => ($stock->roe ?? 0) != 0 ? number_format($stock->roe, 1) . '%' : 'N/A',
         '自己資本比率' => ($stock->equity_ratio ?? 0) > 0 ? number_format($stock->equity_ratio, 1) . '%' : 'N/A',
-        '配当利回り' => ($stock->dividend_yield ?? 0) > 0 ? number_format($stock->dividend_yield, 2) . '%' : 'N/A',
-        'PEG'       => ($stock->peg ?? 0) > 0 ? number_format($stock->peg, 2) : 'N/A',
-        '利益率'    => ($stock->profit_margin ?? 0) != 0 ? number_format($stock->profit_margin, 1) . '%' : 'N/A',
+        '配当利回り'   => ($stock->dividend_yield ?? 0) > 0 ? number_format($stock->dividend_yield, 2) . '%' : 'N/A',
+        'PEG'          => ($stock->peg ?? 0) > 0 ? number_format($stock->peg, 2) : 'N/A',
+        '利益率'       => ($stock->profit_margin ?? 0) != 0 ? number_format($stock->profit_margin, 1) . '%' : 'N/A',
     ];
 
     echo '<div style="background:#fff;border:2px solid ' . $sc_judgment['color'] . ';border-radius:8px;padding:20px;margin-bottom:25px;">';
     echo '<div style="display:flex;align-items:center;gap:20px;margin-bottom:15px;">';
     echo '<div style="text-align:center;"><div style="font-size:48px;font-weight:bold;color:' . $sc_judgment['color'] . ';">' . $sc_score . '</div><div style="font-size:12px;color:#888;">/ 100点</div></div>';
-    echo '<div><div style="font-size:22px;font-weight:bold;color:' . $sc_judgment['color'] . ';">' . $sc_judgment['label'] . '</div><div style="font-size:12px;color:#888;margin-top:4px;">財務スコアカード</div></div>';
+    echo '<div><div style="font-size:22px;font-weight:bold;color:' . $sc_judgment['color'] . ';">' . $sc_judgment['label'] . '</div><div style="font-size:12px;color:#888;margin-top:4px;">財務スコアカード' . (!empty($score_result['coverage']) ? '（データ充足度：' . esc_html($score_result['coverage']) . '指標）' : '') . '</div></div>';
     echo '</div>';
     echo '<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="background:#f8f9fa;">';
+    echo '<th style="padding:6px 10px;text-align:left;border:1px solid #ddd;">軸</th>';
     echo '<th style="padding:6px 10px;text-align:left;border:1px solid #ddd;">指標</th>';
     echo '<th style="padding:6px 10px;text-align:center;border:1px solid #ddd;">値</th>';
     echo '<th style="padding:6px 10px;text-align:center;border:1px solid #ddd;">点数</th>';
     echo '<th style="padding:6px 10px;text-align:center;border:1px solid #ddd;">評価</th>';
     echo '</tr></thead><tbody>';
     foreach ($sc_detail as $name => $d) {
-        $c = $d['点数'] >= 10 ? '#27ae60' : ($d['点数'] >= 5 ? '#f39c12' : '#e74c3c');
-        if ($d['評価'] === 'N/A') $c = '#888';
+        $pts = $d['点数'] ?? null;
+        if ($pts === null) {
+            $c = '#888';
+        } elseif (isset($d['満点'])) {
+            // v2（日本株）：軸ごとに満点が異なるため、満点に対する割合で色分けする
+            $c = $pts >= $d['満点'] * 0.6 ? '#27ae60' : ($pts > 0 ? '#f39c12' : '#e74c3c');
+        } else {
+            // v1（米国株）：従来どおり固定の点数しきい値（N/Aは評価文字列で判定、点数は0のまま）
+            $c = $d['評価'] === 'N/A' ? '#888' : ($pts >= 10 ? '#27ae60' : ($pts >= 5 ? '#f39c12' : '#e74c3c'));
+        }
+        $val = $d['値'] ?? ($sc_values_us_fallback[$name] ?? '-');
         echo '<tr>';
+        echo '<td style="padding:5px 10px;border:1px solid #ddd;color:#888;font-size:12px;">' . esc_html($d['軸'] ?? '') . '</td>';
         echo '<td style="padding:5px 10px;border:1px solid #ddd;">' . esc_html($name) . '</td>';
-        echo '<td style="padding:5px 10px;text-align:center;border:1px solid #ddd;font-weight:bold;">' . esc_html($sc_values[$name] ?? '-') . '</td>';
-        echo '<td style="padding:5px 10px;text-align:center;border:1px solid #ddd;font-weight:bold;color:' . $c . ';">' . $d['点数'] . '点</td>';
+        echo '<td style="padding:5px 10px;text-align:center;border:1px solid #ddd;font-weight:bold;">' . esc_html($val) . '</td>';
+        echo '<td style="padding:5px 10px;text-align:center;border:1px solid #ddd;font-weight:bold;color:' . $c . ';">' . ($pts === null ? 'N/A' : $pts . '点' . (!empty($d['満点']) ? '／' . $d['満点'] . '点' : '')) . '</td>';
         echo '<td style="padding:5px 10px;text-align:center;border:1px solid #ddd;color:' . $c . ';">' . esc_html($d['評価']) . '</td>';
         echo '</tr>';
+    }
+    // 減点フラグがあれば、スコア表の下に理由付きで一覧表示する
+    if (!empty($score_result['flags'])) {
+        echo '<tr><td colspan="5" style="padding:8px 10px;border:1px solid #ddd;background:#fff5f5;">';
+        echo '<div style="font-size:12px;color:#c0392b;font-weight:bold;margin-bottom:4px;">&#x26A0;&#xFE0F; 減点フラグ（合計' . esc_html($score_result['penalty'] ?? 0) . '点・上限-15点）</div>';
+        foreach ($score_result['flags'] as $f) {
+            echo '<div style="font-size:12px;color:#c0392b;">・[' . esc_html($f['重さ']) . '] ' . esc_html($f['label']) . '（' . esc_html($f['penalty']) . '点）</div>';
+        }
+        echo '</td></tr>';
     }
     // 適正株価行を追加（セクター平均PER基準・循環参照なし）
     if ($fair_price_actual !== null || $fair_price_forward !== null) {

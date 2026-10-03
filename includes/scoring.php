@@ -68,9 +68,278 @@ function wp_stocks_calc_fair_price($stock) {
     return $result;
 }
 
+// 直近の本決算(FY)レコードを新しい順に$limit件取得する（J-Quants由来のみ）
+function wp_stocks_get_latest_annual_financials($stock_id, $limit = 2) {
+    global $wpdb;
+    if (empty($stock_id)) return [];
+    return $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials
+         WHERE stock_id = %d AND source = 'jquants' AND fiscal_quarter = 4
+         ORDER BY period_end DESC LIMIT %d",
+        $stock_id, $limit
+    ));
+}
+
+// --------------------------------------------------
+// 財務スコアカード v2（日本株専用）
+// バリュー・クオリティ・成長・安全性・還元の5軸（各軸の配点は固定）。
+// 軸の中でデータが取れた指標だけを使って軸内を正規化し、最後に軸の配点を掛けて合算する
+// （N/Aの指標があっても、その指標ぶん単純に0点扱いにはしない）。
+// 銀行・金融（TOPIX-17コード1631/1632）は、自己資本比率・利益率を評価対象から外し、
+// その配点をROEに寄せる（レバレッジが前提の業態のため）。
+// 減点フラグ（バリュートラップ懸念・利益の質懸念・営業CF赤字・配当性向過大・減収減益）は
+// 軽度-3/中度-7/重度-15点で、合計の減点は-15点を上限とする。
+// --------------------------------------------------
+function wp_stocks_calc_score_jp($stock) {
+    $sector       = wp_stocks_get_effective_sector($stock);
+    $topix17      = wp_stocks_sector33_to_topix17($sector);
+    $is_financial = in_array($topix17, ['1631', '1632'], true); // 1631=銀行、1632=金融（除く銀行）
+
+    $fy  = wp_stocks_get_latest_annual_financials($stock->id ?? 0, 2);
+    $fy0 = $fy[0] ?? null; // 直近本決算
+    $fy1 = $fy[1] ?? null; // 前期本決算
+
+    $detail      = [];
+    $flags       = [];
+    $axis_earned = [];
+    $axis_max    = [];
+
+    // $earnedがnullの指標は、軸の配点（分母）からも除外する（N/A除外の正規化）
+    $add = function($axis, $label, $max, $earned, $eval, $value = null) use (&$detail, &$axis_earned, &$axis_max) {
+        if ($earned === null) {
+            $detail[$label] = ['軸' => $axis, '値' => $value ?? 'N/A', '点数' => null, '評価' => 'N/A', '満点' => $max];
+            return;
+        }
+        $axis_max[$axis]    = ($axis_max[$axis] ?? 0) + $max;
+        $axis_earned[$axis] = ($axis_earned[$axis] ?? 0) + $earned;
+        $detail[$label] = ['軸' => $axis, '値' => $value, '点数' => $earned, '評価' => $eval, '満点' => $max];
+    };
+
+    // ---------- A. バリュー（20点） ----------
+    $per = floatval($stock->per ?? 0);
+    $avg_per_info   = wp_stocks_get_sector_avg_per($sector, false, $stock->id ?? null, false, $stock->market ?? '');
+    $sector_avg_per = $avg_per_info['value'];
+    if ($per > 0 && $sector_avg_per > 0) {
+        $per_ratio = $per / $sector_avg_per;
+        if     ($per_ratio < 0.7) { $pts = 10; $ev = '業種平均より割安'; }
+        elseif ($per_ratio < 1.0) { $pts = 7;  $ev = '業種平均並み'; }
+        elseif ($per_ratio < 1.3) { $pts = 3;  $ev = '業種平均より割高'; }
+        else                      { $pts = 0;  $ev = '割高'; }
+        $add('バリュー', 'PER業種比', 10, $pts, $ev, number_format($per_ratio, 2) . '倍（業種平均' . number_format($sector_avg_per, 1) . '倍）');
+    } else {
+        $add('バリュー', 'PER業種比', 10, null, 'N/A');
+    }
+
+    $pbr = floatval($stock->pbr ?? 0);
+    $roe = floatval($stock->roe ?? 0);
+    if ($pbr > 0) {
+        if ($pbr < 1 && $roe > 0 && $roe < 8) {
+            $pts = 3; $ev = 'バリュートラップ懸念';
+            $flags[] = ['label' => 'バリュートラップ懸念（PBR' . number_format($pbr, 2) . '倍・ROE' . number_format($roe, 1) . '%）', 'penalty' => -3, '重さ' => '軽度'];
+        } elseif ($pbr < 1 && $roe >= 8) { $pts = 10; $ev = '割安（ROE裏付けあり）'; }
+        elseif ($pbr < 2)                { $pts = 6;  $ev = '適正'; }
+        elseif ($pbr < 3)                { $pts = 3;  $ev = 'やや割高'; }
+        else                              { $pts = 0;  $ev = '割高'; }
+        $add('バリュー', 'PBR×ROE', 10, $pts, $ev, 'PBR' . number_format($pbr, 2) . '倍・ROE' . number_format($roe, 1) . '%');
+    } else {
+        $add('バリュー', 'PBR×ROE', 10, null, 'N/A');
+    }
+
+    // ---------- B. クオリティ（非金融20点／金融30点） ----------
+    $roe_max = $is_financial ? 25 : 10;
+    if ($roe > 0) {
+        if     ($roe >= 15) { $frac = 1.0; $ev = '優良'; }
+        elseif ($roe >= 10) { $frac = 0.7; $ev = '良好'; }
+        elseif ($roe >= 5)  { $frac = 0.3; $ev = '普通'; }
+        else                 { $frac = 0.0; $ev = '低い'; }
+        $add('クオリティ', 'ROE', $roe_max, round($roe_max * $frac, 1), $ev, number_format($roe, 1) . '%');
+    } else {
+        $add('クオリティ', 'ROE', $roe_max, null, 'N/A');
+    }
+
+    if (!$is_financial) {
+        $profit_margin = null; $pm_src = '';
+        if ($fy0 && !empty($fy0->revenue) && $fy0->net_income !== null) {
+            $profit_margin = $fy0->net_income / $fy0->revenue * 100;
+            $pm_src = 'J-Quants';
+        } elseif (!empty($stock->profit_margin)) {
+            $profit_margin = floatval($stock->profit_margin);
+            $pm_src = 'Yahoo';
+        }
+        if ($profit_margin !== null) {
+            if     ($profit_margin >= 15) { $pts = 5; $ev = '優良'; }
+            elseif ($profit_margin >= 10) { $pts = 3; $ev = '良好'; }
+            elseif ($profit_margin >= 5)  { $pts = 1; $ev = '普通'; }
+            else                           { $pts = 0; $ev = '低い'; }
+            $add('クオリティ', '利益率', 5, $pts, $ev, number_format($profit_margin, 1) . '%（' . $pm_src . '）');
+        } else {
+            $add('クオリティ', '利益率', 5, null, 'N/A');
+        }
+    }
+
+    if ($fy0 && !empty($fy0->net_income) && $fy0->net_income > 0 && $fy0->cf_operating !== null) {
+        $cf_ratio = $fy0->cf_operating / $fy0->net_income;
+        if     ($cf_ratio >= 1.2) { $pts = 5; $ev = '良好'; }
+        elseif ($cf_ratio >= 0.8) { $pts = 3; $ev = '普通'; }
+        else {
+            $pts = 0; $ev = '利益の質に懸念';
+            $flags[] = ['label' => '利益の質懸念（営業CF÷純利益' . number_format($cf_ratio, 2) . '倍）', 'penalty' => -3, '重さ' => '軽度'];
+        }
+        $add('クオリティ', '営業CF÷純利益', 5, $pts, $ev, number_format($cf_ratio, 2) . '倍');
+    } else {
+        $add('クオリティ', '営業CF÷純利益', 5, null, 'N/A');
+    }
+
+    // ---------- C. 成長（30点） ----------
+    if ($fy0 && $fy1 && $fy0->revenue !== null && $fy1->revenue !== null && $fy0->operating_profit !== null && $fy1->operating_profit !== null) {
+        $rev_up = $fy0->revenue > $fy1->revenue;
+        $op_up  = $fy0->operating_profit > $fy1->operating_profit;
+        if ($rev_up && $op_up) { $pts = 15; $ev = '増収増益'; }
+        elseif ($rev_up || $op_up) { $pts = 8; $ev = $rev_up ? '増収減益' : '減収増益'; }
+        else {
+            $pts = 0; $ev = '減収減益';
+            $flags[] = ['label' => '減収かつ減益（前年比）', 'penalty' => -15, '重さ' => '重度'];
+        }
+        $add('成長', '増収増益判定（前年比）', 15, $pts, $ev);
+    } else {
+        $add('成長', '増収増益判定（前年比）', 15, null, 'N/A');
+    }
+
+    if ($fy0 && $fy1 && !empty($fy1->revenue) && $fy1->revenue > 0 && $fy0->revenue !== null) {
+        $rev_growth = ($fy0->revenue - $fy1->revenue) / $fy1->revenue * 100;
+        if     ($rev_growth >= 10) { $pts = 5; $ev = '高成長'; }
+        elseif ($rev_growth >= 5)  { $pts = 3; $ev = '成長'; }
+        elseif ($rev_growth >= 0)  { $pts = 1; $ev = '横ばい'; }
+        else                        { $pts = 0; $ev = '減収'; }
+        $add('成長', '売上成長率', 5, $pts, $ev, number_format($rev_growth, 1) . '%');
+    } else {
+        $add('成長', '売上成長率', 5, null, 'N/A');
+    }
+
+    if ($fy0 && $fy1 && !empty($fy1->operating_profit) && $fy1->operating_profit > 0 && $fy0->operating_profit !== null) {
+        $op_growth = ($fy0->operating_profit - $fy1->operating_profit) / $fy1->operating_profit * 100;
+        if     ($op_growth >= 15) { $pts = 5; $ev = '高成長'; }
+        elseif ($op_growth >= 5)  { $pts = 3; $ev = '成長'; }
+        elseif ($op_growth >= 0)  { $pts = 1; $ev = '横ばい'; }
+        else                        { $pts = 0; $ev = '減益'; }
+        $add('成長', '営業利益成長率', 5, $pts, $ev, number_format($op_growth, 1) . '%');
+    } else {
+        $add('成長', '営業利益成長率', 5, null, 'N/A');
+    }
+
+    // 会社予想の増益率（予想EPS÷実績EPS）。実績EPSが株式分割の疑いで乖離している場合はN/A扱いにする
+    $eps_fy_actual = floatval($stock->jquants_eps ?? 0);
+    $yahoo_eps     = floatval($stock->eps ?? 0);
+    $feps          = floatval($stock->jquants_forecast_eps ?? 0);
+    $eps_ratio_ok  = ($yahoo_eps <= 0 || $eps_fy_actual <= 0) ? true : (($eps_fy_actual / $yahoo_eps) >= 0.5 && ($eps_fy_actual / $yahoo_eps) <= 2.0);
+    if ($eps_fy_actual > 0 && $feps > 0 && $eps_ratio_ok) {
+        $f_growth = ($feps - $eps_fy_actual) / $eps_fy_actual * 100;
+        if     ($f_growth >= 10) { $pts = 5; $ev = '増益予想'; }
+        elseif ($f_growth >= 0)  { $pts = 3; $ev = '横ばい予想'; }
+        else                      { $pts = 0; $ev = '減益予想'; }
+        $add('成長', '会社予想の増益率', 5, $pts, $ev, number_format($f_growth, 1) . '%');
+    } else {
+        $add('成長', '会社予想の増益率', 5, null, 'N/A');
+    }
+
+    // ---------- D. 安全性（非金融20点／金融10点） ----------
+    if (!$is_financial) {
+        $eq = floatval($stock->equity_ratio ?? 0);
+        if ($eq > 0) {
+            if     ($eq >= 50) { $pts = 10; $ev = '安全'; }
+            elseif ($eq >= 30) { $pts = 6;  $ev = '普通'; }
+            elseif ($eq >= 20) { $pts = 3;  $ev = 'やや低い'; }
+            else                 { $pts = 0;  $ev = '注意'; }
+            $add('安全性', '自己資本比率', 10, $pts, $ev, number_format($eq, 1) . '%');
+        } else {
+            $add('安全性', '自己資本比率', 10, null, 'N/A');
+        }
+    }
+
+    if ($fy0 && $fy0->cf_operating !== null) {
+        if ($fy0->cf_operating > 0) { $pts = 5; $ev = '黒字'; }
+        else {
+            $pts = 0; $ev = '赤字';
+            $flags[] = ['label' => '営業CF赤字', 'penalty' => -7, '重さ' => '中度'];
+        }
+        $add('安全性', '営業CFの黒字継続', 5, $pts, $ev);
+    } else {
+        $add('安全性', '営業CFの黒字継続', 5, null, 'N/A');
+    }
+
+    if ($fy0 && $fy0->payout_ratio_annual !== null && $fy0->payout_ratio_annual > 0) {
+        $payout = $fy0->payout_ratio_annual;
+        if ($payout >= 30 && $payout <= 60) { $pts = 5; $ev = '健全'; }
+        elseif ($payout > 80) {
+            $pts = 0; $ev = '過大';
+            $flags[] = ['label' => '配当性向過大（' . number_format($payout, 1) . '%）', 'penalty' => -7, '重さ' => '中度'];
+        } else { $pts = 3; $ev = '許容範囲'; }
+        $add('安全性', '配当性向', 5, $pts, $ev, number_format($payout, 1) . '%');
+    } else {
+        $add('安全性', '配当性向', 5, null, 'N/A');
+    }
+
+    // ---------- E. 還元（10点） ----------
+    // ★自社株買い（発行済株式数の推移）は未取得のため今回は対象外。配点は配当利回りに寄せている
+    $div = floatval($stock->dividend_yield ?? 0);
+    if     ($div >= 3.5) { $pts = 10; $ev = '高配当'; }
+    elseif ($div >= 2)   { $pts = 7;  $ev = '普通'; }
+    elseif ($div >= 1)   { $pts = 3;  $ev = '低め'; }
+    else                  { $pts = 0;  $ev = '低い/なし'; }
+    $add('還元', '配当利回り', 10, $pts, $ev, number_format($div, 2) . '%');
+
+    // ---------- 軸の集計 → 最終スコア ----------
+    $axis_weight = [
+        'バリュー'   => 20,
+        'クオリティ' => $is_financial ? 30 : 20,
+        '成長'       => 30,
+        '安全性'     => $is_financial ? 10 : 20,
+        '還元'       => 10,
+    ];
+    $total_weight = 0; $total_earned = 0;
+    foreach ($axis_weight as $axis => $w) {
+        if (!empty($axis_max[$axis])) {
+            $total_weight += $w;
+            $total_earned += ($axis_earned[$axis] / $axis_max[$axis]) * $w;
+        }
+    }
+    $raw_score = $total_weight > 0 ? ($total_earned / $total_weight * 100) : 0;
+
+    $penalty = 0;
+    foreach ($flags as $f) $penalty += $f['penalty'];
+    $penalty = max($penalty, -15); // 減点の合計は-15点を上限とする
+
+    $score = (int) round(max(0, $raw_score + $penalty));
+
+    $covered = 0; $total_items = 0;
+    foreach ($detail as $d) { $total_items++; if ($d['点数'] !== null) $covered++; }
+
+    if     ($score >= 70) $judgment = ['label' => '買い候補', 'color' => '#27ae60'];
+    elseif ($score >= 50) $judgment = ['label' => '中立',     'color' => '#f39c12'];
+    else                   $judgment = ['label' => '要注意',   'color' => '#e74c3c'];
+
+    return [
+        'score' => $score, 'judgment' => $judgment, 'detail' => $detail,
+        'flags' => $flags, 'penalty' => $penalty, 'coverage' => $covered . '/' . $total_items,
+        'is_financial' => $is_financial, 'version' => 'v2',
+    ];
+}
+
 function wp_stocks_calc_score($stock) {
+    $is_usd = ($stock->currency ?? 'JPY') === 'USD';
+    if (!$is_usd) {
+        return wp_stocks_calc_score_jp($stock);
+    }
+    return wp_stocks_calc_score_us($stock);
+}
+
+// --------------------------------------------------
+// 財務スコアカード v1（米国株専用。従来ロジックのまま、名前のみ変更）
+// --------------------------------------------------
+function wp_stocks_calc_score_us($stock) {
     $score  = 0;
     $detail = [];
+
 
     $per = floatval($stock->per ?? 0);
     if ($per > 0 && $per < 15)       { $score += 20; $detail['PER'] = ['点数' => 20, '評価' => '割安']; }
