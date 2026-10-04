@@ -234,6 +234,22 @@ function wp_stocks_tachibana_get_price($symbol) {
 }
 
 // --------------------------------------------------
+// 複数銘柄の現在値をまとめて取得し、get_price と同じキャッシュへ入れる（cron用）
+//   戻り値: キャッシュに入れた銘柄数。取れなかった銘柄は、後続の get_price が個別に取得／Yahooへ
+// --------------------------------------------------
+function wp_stocks_tachibana_prefetch_prices(array $symbols, $ttl = 300) {
+    $codes = [];
+    foreach ($symbols as $s) {
+        if (wp_stocks_tachibana_is_jp_symbol($s)) $codes[] = wp_stocks_tachibana_normalize_code($s);
+    }
+    $map = wp_stocks_tachibana_get_prices($codes);
+    foreach ($map as $code => $row) {
+        set_transient('wp_stocks_tcb_px_' . md5($code), $row, $ttl);
+    }
+    return count($map);
+}
+
+// --------------------------------------------------
 // 日足（CLMMfdsGetMarketPriceHistory）→ Yahoo版 wp_stocks_get_ohlcv と同じ形式
 //   - 1要求1銘柄、期間指定なし（全期間が返る）→ 末尾 $count 本だけ使う
 //   - 株式分割換算後の値（xK付き）を優先（Yahooのchartも分割調整済みのため）

@@ -41,12 +41,27 @@ add_action('wp_stocks_cron_event', function() {
     // 正しい前日比を上書きしてしまう。日本株のみを対象にする。
     $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE (currency IS NULL OR currency != 'USD')");
     $count  = 0;
+
+    // 日本株の現在値を立花証券から50銘柄ずつまとめて取得し、キャッシュへ入れる
+    // （以降の wp_stocks_save_price() はキャッシュから返る。取れなかった銘柄だけYahooへフォールバック）
+    $tcb_syms = [];
+    foreach ($stocks as $s) {
+        if (($s->currency ?? 'JPY') !== 'USD') $tcb_syms[] = $s->code . '.T';
+    }
+    if (function_exists('wp_stocks_tachibana_prefetch_prices')) {
+        $tcb_n = wp_stocks_tachibana_prefetch_prices($tcb_syms);
+        wp_stocks_log('info', 'cron_price', 'JP', "立花証券から{$tcb_n}銘柄の時価をまとめて取得しました");
+    }
+
     foreach ($stocks as $s) {
         $sym = ($s->currency ?? 'JPY') === 'USD' ? $s->code : $s->code . '.T';
         wp_stocks_save_price($s->id, $sym);
         $count++;
-        // Yahoo!ブロック対策: ランダムsleep
-        sleep(rand(3, 8));
+        // Yahoo!ブロック対策: ランダムsleep（立花証券のキャッシュから取れた銘柄はYahooを叩いていないので不要）
+        $via_tachibana = function_exists('wp_stocks_tachibana_is_jp_symbol')
+            && wp_stocks_tachibana_is_jp_symbol($sym)
+            && get_transient('wp_stocks_tcb_px_' . md5(wp_stocks_tachibana_normalize_code($sym))) !== false;
+        if (!$via_tachibana) sleep(rand(3, 8));
     }
     wp_stocks_log('info', 'cron_price', 'ALL', $count . '銘柄の株価を取得しました');
 });
