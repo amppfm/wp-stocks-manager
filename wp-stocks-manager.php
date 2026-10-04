@@ -29,6 +29,7 @@ require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/edgar.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/fmp.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/edinet.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/jpx.php';
+require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/tachibana.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/yahoo-scraping.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/index-quotes.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/technicals.php';

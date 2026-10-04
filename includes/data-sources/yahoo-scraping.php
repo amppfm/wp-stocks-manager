@@ -10,6 +10,11 @@ if (!defined('ABSPATH')) exit;
 // Yahoo! Finance APIから株価取得（前日終値・出来高も取得）
 // --------------------------------------------------
 function wp_stocks_get_price($symbol) {
+    // 日本株は立花証券API優先。取得できなければ従来どおりYahooへフォールバック
+    if (function_exists('wp_stocks_tachibana_is_jp_symbol') && wp_stocks_tachibana_is_jp_symbol($symbol)) {
+        $tachibana = wp_stocks_tachibana_get_price($symbol);
+        if ($tachibana) return $tachibana;
+    }
     $url = "https://query1.finance.yahoo.com/v8/finance/chart/{$symbol}?interval=1d&range=5d";
     $response = wp_remote_get($url, [
         'headers' => ['User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'],
@@ -63,6 +68,15 @@ function wp_stocks_get_ohlcv($symbol) {
     $cache_key = 'wp_stocks_ohlcv_' . md5($symbol);
     $cached    = get_transient($cache_key);
     if ($cached !== false) return $cached;
+
+    // 日本株は立花証券の日足を優先（取得できなければ下のYahoo取得へフォールバック）
+    if (function_exists('wp_stocks_tachibana_is_jp_symbol') && wp_stocks_tachibana_is_jp_symbol($symbol)) {
+        $tachibana_bars = wp_stocks_tachibana_fetch_daily_bars($symbol, 130);
+        if ($tachibana_bars) {
+            set_transient($cache_key, $tachibana_bars, 6 * HOUR_IN_SECONDS);
+            return $tachibana_bars;
+        }
+    }
 
     $url      = "https://query1.finance.yahoo.com/v8/finance/chart/{$symbol}?interval=1d&range=6mo";
     $response = wp_remote_get($url, [
