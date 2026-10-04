@@ -337,3 +337,24 @@ function wp_stocks_tachibana_debug($symbol = '7203') {
     $out['mapped_bars_last5'] = $bars;
     return $out;
 }
+
+// --------------------------------------------------
+// 当日分の日足が取得できる状態か（日足は取引終了後に更新されるため、cronの実行可否の判定に使う）
+//   true : 当日分あり、または今日は取引日でない（待つ必要なし）
+//   false: 取引日なのに当日分が未反映（待つべき）
+//   null : 判定不能（APIエラー・セッション失効など → 待たずに従来どおり進める）
+// --------------------------------------------------
+function wp_stocks_tachibana_daily_ready($probe = '7203') {
+    $now  = new DateTime('now', new DateTimeZone('Asia/Tokyo'));
+    $wday = (int)$now->format('w');
+    if ($wday === 0 || $wday === 6) return true;
+    if (function_exists('wp_stocks_get_holidays')
+        && in_array($now->format('Y-m-d'), wp_stocks_get_holidays(), true)) {
+        return true;
+    }
+
+    $bars = wp_stocks_tachibana_fetch_daily_bars($probe . '.T', 3);
+    if (!$bars) return null;
+    $last = end($bars);
+    return $last['date'] >= $now->format('Y-m-d');
+}

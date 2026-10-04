@@ -73,8 +73,26 @@ add_action('wp_stocks_cron_event', function() {
 // --------------------------------------------------
 add_action('wp_stocks_technical_cron', function() {
     global $wpdb;
+
+    // 立花証券の日足は取引終了後に更新される。取引日で当日分がまだなら15分後に再実行（23:00まで）
+    if (function_exists('wp_stocks_tachibana_daily_ready') && wp_stocks_tachibana_daily_ready() === false) {
+        $now_jst = new DateTime('now', new DateTimeZone('Asia/Tokyo'));
+        if ((int)$now_jst->format('Hi') < 2300) {
+            wp_schedule_single_event(time() + 900, 'wp_stocks_technical_cron');
+            wp_stocks_log('info', 'technical_cron', 'JP', '立花証券の日足が未更新のため15分後に再実行します');
+            return;
+        }
+        wp_stocks_log('error', 'technical_cron', 'JP', '23:00になっても立花証券の日足が更新されないため、取得できるデータで計算します');
+    }
+
     // 日本株のみ
     $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE (currency = 'JPY' OR currency IS NULL OR currency = '')");
+    // 日足キャッシュ(6時間)に更新前のデータが残っていると古い値で計算してしまうため、日本株分を破棄する
+    if (function_exists('wp_stocks_tachibana_is_jp_symbol')) {
+        foreach ($stocks as $s) {
+            delete_transient('wp_stocks_ohlcv_' . md5($s->code . '.T'));
+        }
+    }
     $ok = $ng = 0;
     foreach ($stocks as $s) {
         $result = wp_stocks_save_technicals($s->id, $s->code . '.T');
