@@ -182,6 +182,8 @@ function wp_stocks_jquants_extract_quarterly($records) {
             'dividend_q2'           => $clean_float($r['Div2Q'] ?? null),
             'dividend_q3'           => $clean_float($r['Div3Q'] ?? null),
             'dividend_fy'           => $clean_float($r['DivFY'] ?? null),
+            'shares_outstanding'    => $clean_int($r['ShOutFY'] ?? null),
+            'treasury_shares'       => $clean_int($r['TrShFY'] ?? null),
         ];
     }
     return $result;

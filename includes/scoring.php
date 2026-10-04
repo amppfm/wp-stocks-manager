@@ -286,13 +286,27 @@ function wp_stocks_calc_score_jp($stock) {
     }
 
     // ---------- E. 還元（10点） ----------
-    // ★自社株買い（発行済株式数の推移）は未取得のため今回は対象外。配点は配当利回りに寄せている
     $div = floatval($stock->dividend_yield ?? 0);
-    if     ($div >= 3.5) { $pts = 10; $ev = '高配当'; }
-    elseif ($div >= 2)   { $pts = 7;  $ev = '普通'; }
-    elseif ($div >= 1)   { $pts = 3;  $ev = '低め'; }
-    else                  { $pts = 0;  $ev = '低い/なし'; }
-    $add('還元', '配当利回り', 10, $pts, $ev, number_format($div, 2) . '%');
+    if     ($div >= 3.5) { $pts = 7; $ev = '高配当'; }
+    elseif ($div >= 2)   { $pts = 5; $ev = '普通'; }
+    elseif ($div >= 1)   { $pts = 2; $ev = '低め'; }
+    else                  { $pts = 0; $ev = '低い/なし'; }
+    $add('還元', '配当利回り', 7, $pts, $ev, number_format($div, 2) . '%');
+
+    // 自社株買い：発行済株式数から自己株式数を引いた実質的な流通株数が、前期より減っていれば実施と判定する
+    if ($fy0 && $fy1 && $fy0->shares_outstanding !== null && $fy1->shares_outstanding !== null) {
+        $float0 = $fy0->shares_outstanding - ($fy0->treasury_shares ?? 0);
+        $float1 = $fy1->shares_outstanding - ($fy1->treasury_shares ?? 0);
+        if ($float1 > 0 && $float0 < $float1) {
+            $reduction_pct = ($float1 - $float0) / $float1 * 100;
+            $pts = 3; $ev = '実施（流通株数' . number_format($reduction_pct, 1) . '%減）';
+        } else {
+            $pts = 0; $ev = 'なし';
+        }
+        $add('還元', '自社株買い', 3, $pts, $ev);
+    } else {
+        $add('還元', '自社株買い', 3, null, 'N/A');
+    }
 
     // ---------- 軸の集計 → 最終スコア ----------
     $axis_weight = [

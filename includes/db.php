@@ -299,6 +299,13 @@ function wp_stocks_manager_create_tables() {
     if (!in_array('dividend_fy', $wsm_qf_columns, true)) {
         $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN dividend_fy FLOAT DEFAULT NULL AFTER dividend_q3");
     }
+    // ★2026-10-04追加：自社株買い判定（財務スコアv2の還元軸）用に、発行済株式数・自己株式数を追加
+    if (!in_array('shares_outstanding', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN shares_outstanding BIGINT DEFAULT NULL AFTER dividend_fy");
+    }
+    if (!in_array('treasury_shares', $wsm_qf_columns, true)) {
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}stock_quarterly_financials ADD COLUMN treasury_shares BIGINT DEFAULT NULL AFTER shares_outstanding");
+    }
 
     // 既存テーブルへのカラム追加
     $columns = $wpdb->get_col("DESCRIBE {$wpdb->prefix}stocks", 0);
