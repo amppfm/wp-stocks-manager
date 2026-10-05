@@ -148,17 +148,51 @@ add_action('wp_stocks_log_cleanup', function() {
 });
 
 // --------------------------------------------------
-// 株価データ自動クリーンアップ Cron（1年超を削除・毎日03:00）
+// 株価データ自動クリーンアップ Cron（保持月数・実行曜日・時刻は設定ページで変更可。初期値: 24か月・土曜23:00）
 // --------------------------------------------------
 add_action('wp_stocks_price_cleanup', function() {
     global $wpdb;
-    $cutoff = date('Y-m-d H:i:s', strtotime('-1 year'));
+    $months = max(6, intval(get_option('wp_stocks_price_retention_months', 24)));
+    $cutoff = date('Y-m-d H:i:s', strtotime('-' . $months . ' months'));
     $deleted = $wpdb->query($wpdb->prepare(
         "DELETE FROM {$wpdb->prefix}stock_prices WHERE datetime < %s", $cutoff
     ));
     if ($deleted > 0) {
-        wp_stocks_log('info', 'price_cleanup', 'ALL', "1年超の株価データ {$deleted}件を削除しました");
+        wp_stocks_log('info', 'price_cleanup', 'ALL', "{$months}か月超の株価データ {$deleted}件を削除しました");
     }
+});
+
+// 削除cronの（再）登録。設定ページの保存時と、このパッチ適用後の初回アクセス時に呼ぶ
+function wp_stocks_schedule_price_cleanup() {
+    $day  = get_option('wp_stocks_price_cleanup_day', '6');   // 'daily' または 0=日〜6=土
+    $time = get_option('wp_stocks_price_cleanup_time', '23:00');
+    if (!preg_match('/^\d{2}:\d{2}$/', $time)) $time = '23:00';
+    list($h, $m) = explode(':', $time);
+
+    $tz   = new DateTimeZone('Asia/Tokyo');
+    $now  = new DateTime('now', $tz);
+    $next = new DateTime("today {$h}:{$m}:00", $tz);
+
+    wp_clear_scheduled_hook('wp_stocks_price_cleanup');
+
+    if ($day === 'daily') {
+        if ($now >= $next) $next->modify('+1 day');
+        wp_schedule_event($next->getTimestamp(), 'daily', 'wp_stocks_price_cleanup');
+        return;
+    }
+
+    $day  = max(0, min(6, intval($day)));
+    $diff = ($day - intval($now->format('w')) + 7) % 7;
+    if ($diff > 0) $next->modify('+' . $diff . ' day');
+    if ($now >= $next) $next->modify('+7 day');
+    wp_schedule_event($next->getTimestamp(), 'weekly', 'wp_stocks_price_cleanup');
+}
+
+// 旧「毎日03:00」の登録を、新しい既定（土曜23:00）へ一度だけ置き換える
+add_action('init', function() {
+    if (get_option('wp_stocks_price_cleanup_sched_v2')) return;
+    wp_stocks_schedule_price_cleanup();
+    update_option('wp_stocks_price_cleanup_sched_v2', 1);
 });
 
 // --------------------------------------------------

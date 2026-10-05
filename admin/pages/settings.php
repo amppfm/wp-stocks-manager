@@ -207,6 +207,18 @@ function wp_stocks_settings_page() {
         if ($now_u >= $next_u) $next_u->modify('+1 day');
         wp_schedule_event($next_u->getTimestamp(), 'daily', 'wp_stocks_us_cron_event');
 
+        // 株価データ自動削除（保持月数・実行曜日・時刻）
+        $price_ret = isset($_POST['price_retention_months']) ? intval($_POST['price_retention_months']) : 24;
+        $price_ret = max(6, min(120, $price_ret));
+        update_option('wp_stocks_price_retention_months', $price_ret);
+        $pc_day = sanitize_text_field($_POST['price_cleanup_day'] ?? '6');
+        $pc_day = ($pc_day === 'daily') ? 'daily' : (string) max(0, min(6, intval($pc_day)));
+        update_option('wp_stocks_price_cleanup_day', $pc_day);
+        $pc_time = sanitize_text_field($_POST['price_cleanup_time'] ?? '23:00');
+        if (!preg_match('/^\d{2}:\d{2}$/', $pc_time)) $pc_time = '23:00';
+        update_option('wp_stocks_price_cleanup_time', $pc_time);
+        if (function_exists('wp_stocks_schedule_price_cleanup')) wp_stocks_schedule_price_cleanup();
+
         // 企業情報週次更新（J-Quants週次同期・EDGAR四半期取得を含む）の曜日・時刻
         $company_cron_day = isset($_POST['company_cron_day']) ? intval($_POST['company_cron_day']) : 0;
         $company_cron_day = max(0, min(6, $company_cron_day));
@@ -267,9 +279,10 @@ function wp_stocks_settings_page() {
     if (isset($_POST['wp_stocks_manual_cleanup'])) {
         check_admin_referer('wp_stocks_settings_nonce');
         global $wpdb;
-        $cutoff  = date('Y-m-d H:i:s', strtotime('-1 year'));
+        $months  = max(6, intval(get_option('wp_stocks_price_retention_months', 24)));
+        $cutoff  = date('Y-m-d H:i:s', strtotime('-' . $months . ' months'));
         $deleted = $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->prefix}stock_prices WHERE datetime < %s", $cutoff));
-        echo '<div class="updated"><p>株価データのクリーンアップ完了：' . intval($deleted) . '件削除しました。</p></div>';
+        echo '<div class="updated"><p>株価データのクリーンアップ完了（' . $months . 'か月超）：' . intval($deleted) . '件削除しました。</p></div>';
     }
     // 孤立データ（削除済み銘柄に紐づく残骸）の一括クリーンアップ
     if (isset($_POST['wp_stocks_cleanup_orphans'])) {
@@ -569,12 +582,17 @@ function wp_stocks_settings_page() {
     echo '<table class="form-table"><tbody>';
 
     echo '<tr><th>株価データクリーンアップ</th><td>';
-    echo '<p class="description">毎日03:00に1年超の株価データを自動削除します。<br>';
+    $pc2_months = max(6, intval(get_option('wp_stocks_price_retention_months', 24)));
+    $pc2_day    = (string) get_option('wp_stocks_price_cleanup_day', '6');
+    $pc2_time   = get_option('wp_stocks_price_cleanup_time', '23:00');
+    $pc2_names  = ['日', '月', '火', '水', '木', '金', '土'];
+    $pc2_when   = ($pc2_day === 'daily') ? '毎日' : '毎週' . ($pc2_names[intval($pc2_day)] ?? '土') . '曜日';
+    echo '<p class="description">' . esc_html($pc2_when . ' ' . $pc2_time) . 'に、' . intval($pc2_months) . 'か月を超えた株価データを自動削除します（期間・日程は下の「株価データ自動削除」で変更できます）。<br>';
     echo '次回実行予定：' . esc_html($next_cleanup_str) . '<br>';
     echo '現在の株価データ：' . number_format(intval($price_count)) . '件';
     if ($oldest_price) echo '（最古：' . esc_html($oldest_price) . '）';
     echo '</p>';
-    echo '<button type="submit" name="wp_stocks_manual_cleanup" class="button" style="margin-top:5px;" onclick="return confirm(\'1年超の株価データを今すぐ削除しますか？\');">今すぐクリーンアップ実行</button>';
+    echo '<button type="submit" name="wp_stocks_manual_cleanup" class="button" style="margin-top:5px;" onclick="return confirm(\'' . intval($pc2_months) . 'か月超の株価データを今すぐ削除しますか？\');">今すぐクリーンアップ実行</button>';
     echo '</td></tr>';
     
     echo '<tr><th>孤立データクリーンアップ</th><td>';
@@ -602,6 +620,23 @@ function wp_stocks_settings_page() {
     echo '四季報1行目の「［ ］」内の文字列からセクターを再抽出します（対象は手動指定・J-Quants33業種のどちらも無い銘柄のみ。それ以外はスキップされます）。<br>';
     echo '英語セクターのまま残っている旧データの一括修正に使用してください。</p>';
     echo '<button type="submit" name="wp_stocks_bulk_resector_shikiho" class="button button-primary" onclick="return confirm(\'四季報登録済みの' . $shikiho_count . '件について、セクターを再抽出して上書きしますか？\');">四季報からセクターを一括再抽出</button>';
+    echo '</td></tr>';
+
+    $price_ret_months = max(6, intval(get_option('wp_stocks_price_retention_months', 24)));
+    $price_cl_day     = (string) get_option('wp_stocks_price_cleanup_day', '6');
+    $price_cl_time    = get_option('wp_stocks_price_cleanup_time', '23:00');
+    $pc_weekdays      = ['日', '月', '火', '水', '木', '金', '土'];
+
+    echo '<tr><th>株価データ自動削除</th><td>';
+    echo '<input type="number" name="price_retention_months" value="' . esc_attr($price_ret_months) . '" min="6" max="120" style="width:80px;"> か月を超えた株価データを削除　';
+    echo '<select name="price_cleanup_day" style="width:100px;">';
+    echo '<option value="daily"' . selected($price_cl_day, 'daily', false) . '>毎日</option>';
+    foreach ($pc_weekdays as $pc_idx => $pc_label) {
+        echo '<option value="' . esc_attr($pc_idx) . '"' . selected($price_cl_day, (string) $pc_idx, false) . '>' . esc_html($pc_label) . '曜日</option>';
+    }
+    echo '</select> ';
+    echo '<input type="time" name="price_cleanup_time" value="' . esc_attr($price_cl_time) . '" style="width:120px;">';
+    echo '<p class="description">保持月数は6〜120か月（初期値24か月）。保存すると削除の実行日程を組み直します。件数と次回削除予定は、上の「株価データクリーンアップ」に表示されます。</p>';
     echo '</td></tr>';
 
     $next_company     = wp_next_scheduled('wp_stocks_company_cron');

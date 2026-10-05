@@ -460,11 +460,8 @@ function wp_stocks_manager_activate() {
         wp_schedule_event(time(), 'daily', 'wp_stocks_log_cleanup');
     }
     if (!wp_next_scheduled('wp_stocks_price_cleanup')) {
-        // 株価クリーンアップ: 毎日03:00
-        $now4  = new DateTime('now', new DateTimeZone('Asia/Tokyo'));
-        $next4 = new DateTime('today 03:00:00', new DateTimeZone('Asia/Tokyo'));
-        if ($now4 >= $next4) $next4->modify('+1 day');
-        wp_schedule_event($next4->getTimestamp(), 'daily', 'wp_stocks_price_cleanup');
+        // 株価クリーンアップ: 曜日・時刻は設定ページで変更可（初期値: 土曜23:00）
+        if (function_exists('wp_stocks_schedule_price_cleanup')) wp_stocks_schedule_price_cleanup();
     }
     if (!wp_next_scheduled('wp_stocks_company_cron')) {
         $company_day    = intval(get_option('wp_stocks_company_cron_day', 0)); // 0=日〜6=土

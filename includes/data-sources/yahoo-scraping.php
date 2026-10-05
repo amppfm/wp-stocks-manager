@@ -71,14 +71,14 @@ function wp_stocks_get_ohlcv($symbol) {
 
     // 日本株は立花証券の日足を優先（取得できなければ下のYahoo取得へフォールバック）
     if (function_exists('wp_stocks_tachibana_is_jp_symbol') && wp_stocks_tachibana_is_jp_symbol($symbol)) {
-        $tachibana_bars = wp_stocks_tachibana_fetch_daily_bars($symbol, 130);
+        $tachibana_bars = wp_stocks_tachibana_fetch_daily_bars($symbol, 500);
         if ($tachibana_bars) {
             set_transient($cache_key, $tachibana_bars, 6 * HOUR_IN_SECONDS);
             return $tachibana_bars;
         }
     }
 
-    $url      = "https://query1.finance.yahoo.com/v8/finance/chart/{$symbol}?interval=1d&range=6mo";
+    $url      = "https://query1.finance.yahoo.com/v8/finance/chart/{$symbol}?interval=1d&range=2y";
     $response = wp_remote_get($url, [
         'headers' => ['User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'],
         'timeout' => 20,
