@@ -946,7 +946,11 @@ add_action('admin_post_backfill_all_prices', function() {
     set_time_limit(60);
     global $wpdb;
 
-    $batch_size     = 15;
+    $full_mode      = (($_GET['range'] ?? '') === 'full');
+    $batch_size     = $full_mode ? 5 : 15;
+    if ($full_mode) set_time_limit(180);
+    $bf_months      = max(6, intval(get_option('wp_stocks_price_retention_months', 24)));
+    $backfill_days  = $full_mode ? (int) ceil((time() - strtotime('-' . $bf_months . ' months')) / 86400) : 30;
     $offset         = intval($_GET['offset'] ?? 0);
     $total_inserted = intval($_GET['total'] ?? 0);
 
@@ -957,14 +961,14 @@ add_action('admin_post_backfill_all_prices', function() {
 
     foreach ($stocks as $s) {
         $sym = ($s->currency ?? 'JPY') === 'USD' ? $s->code : $s->code . '.T';
-        $total_inserted += wp_stocks_backfill_price_history($s->id, $sym, 30);
+        $total_inserted += wp_stocks_backfill_price_history($s->id, $sym, $backfill_days);
         usleep(300000); // 0.3秒
     }
 
     $done = count($stocks) < $batch_size;
 
     if ($done) {
-        wp_stocks_log('info', 'backfill_all', 'ALL', "過去30日分の株価バックフィル完了：{$total_inserted}件挿入");
+        wp_stocks_log('info', 'backfill_all', 'ALL', "過去{$backfill_days}日分の株価バックフィル完了：{$total_inserted}件挿入");
         wp_redirect(admin_url('admin.php?page=wp-stocks-settings&message=backfill_done&n=' . $total_inserted));
         exit;
     }
@@ -972,9 +976,12 @@ add_action('admin_post_backfill_all_prices', function() {
     // まだ続きがある → 手動で次に進むボタンを表示
     $next_offset = $offset + $batch_size;
     $next_url = wp_nonce_url(
-        admin_url('admin-post.php?action=backfill_all_prices&offset=' . $next_offset . '&total=' . $total_inserted),
+        admin_url('admin-post.php?action=backfill_all_prices&offset=' . $next_offset . '&total=' . $total_inserted . ($full_mode ? '&range=full' : '')),
         'wp_stocks_backfill_nonce'
     );
+    if ($full_mode) {
+        echo '<script>setTimeout(function(){location.href=' . wp_json_encode(html_entity_decode($next_url, ENT_QUOTES)) . ';},1000);</script>';
+    }
     echo '<div style="font-family:sans-serif;padding:40px;text-align:center;">';
     echo '<h2>バックフィル処理中…</h2>';
     echo '<p>' . $next_offset . '件目まで処理しました（累計挿入：' . $total_inserted . '件）。</p>';

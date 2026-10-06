@@ -611,6 +611,10 @@ function wp_stocks_settings_page() {
     echo '再登録した銘柄でグラフが乱れている場合に実行してください（既存のレコードは上書きしません）。</p>';
     $backfill_url = wp_nonce_url(admin_url('admin-post.php?action=backfill_all_prices'), 'wp_stocks_backfill_nonce');
     echo '<a href="' . esc_url($backfill_url) . '" class="button button-primary" onclick="return confirm(\'全銘柄の過去30日分の株価を補完しますか？\\n銘柄数が多い場合は数分かかります。\');">過去30日分を今すぐ補完</a>';
+    $bf_months_ui       = max(6, intval(get_option('wp_stocks_price_retention_months', 24)));
+    $backfill_full_url  = wp_nonce_url(admin_url('admin-post.php?action=backfill_all_prices&range=full'), 'wp_stocks_backfill_nonce');
+    echo ' <a href="' . esc_url($backfill_full_url) . '" class="button" onclick="return confirm(\'全銘柄の過去' . $bf_months_ui . 'か月分の株価を補完しますか？\\n銘柄数が多いため20〜30分ほどかかります。実行中はこのタブを閉じないでください。\');">過去' . $bf_months_ui . 'か月分を今すぐ補完</a>';
+    echo '<p class="description" style="margin-top:6px;">保持月数の設定（現在' . $bf_months_ui . 'か月）の範囲で、足りない日を日足データから埋めます（既存のレコードは上書きしません）。画面が自動で次の処理へ進みます。</p>';
     echo '</td></tr>';
 
     // 四季報からセクターを一括再抽出

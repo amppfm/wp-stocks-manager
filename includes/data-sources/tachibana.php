@@ -194,7 +194,7 @@ function wp_stocks_tachibana_get_prices(array $codes) {
         $data = wp_stocks_tachibana_request('price', [
             'sCLMID'           => 'CLMMfdsGetMarketPrice',
             'sTargetIssueCode' => implode(',', $chunk),
-            'sTargetColumn'    => 'pDPP,tDPP:T,pPRP,pDV', // 現在値, 現在値時刻, 前日終値, 出来高
+            'sTargetColumn'    => 'pDPP,tDPP:T,pPRP,pDV,pDOP,pDHP,pDLP', // 現在値, 現在値時刻, 前日終値, 出来高, 始値, 高値, 安値
         ]);
         if (is_wp_error($data)) {
             wp_stocks_tachibana_log('error', implode(',', array_slice($chunk, 0, 3)), '時価取得失敗: ' . $data->get_error_message());
@@ -208,6 +208,9 @@ function wp_stocks_tachibana_get_prices(array $codes) {
                 'c'              => $c,
                 'previous_close' => wp_stocks_tachibana_num($row['pPRP'] ?? null),
                 'volume'         => $v !== null ? intval($v) : null,
+                'o'              => wp_stocks_tachibana_num($row['pDOP'] ?? null),
+                'h'              => wp_stocks_tachibana_num($row['pDHP'] ?? null),
+                'l'              => wp_stocks_tachibana_num($row['pDLP'] ?? null),
             ];
         }
     }
@@ -246,6 +249,7 @@ function wp_stocks_tachibana_prefetch_prices(array $symbols, $ttl = 300) {
     foreach ($map as $code => $row) {
         set_transient('wp_stocks_tcb_px_' . md5($code), $row, $ttl);
     }
+    wp_stocks_tachibana_store_today_bars($map);
     return count($map);
 }
 
@@ -299,6 +303,7 @@ function wp_stocks_tachibana_fetch_daily_bars($symbol, $count = 130) {
     if (!$bars) return false;
 
     usort($bars, function ($a, $b) { return strcmp($a['date'], $b['date']); });
+    $bars = wp_stocks_tachibana_append_today_bar($code, $bars);
     if ($count > 0 && count($bars) > $count) $bars = array_slice($bars, -$count);
     return $bars;
 }
@@ -353,8 +358,90 @@ function wp_stocks_tachibana_daily_ready($probe = '7203') {
         return true;
     }
 
+    // 当日バーを時価から組み立て済みなら、履歴の更新を待たずに進める
+    $tcb_today = get_transient('wp_stocks_tcb_today_bars');
+    if (is_array($tcb_today) && ($tcb_today['date'] ?? '') === $now->format('Y-m-d') && !empty($tcb_today['bars'])) return true;
     $bars = wp_stocks_tachibana_fetch_daily_bars($probe . '.T', 3);
     if (!$bars) return null;
     $last = end($bars);
     return $last['date'] >= $now->format('Y-m-d');
+}
+
+
+// --------------------------------------------------
+// 当日バー（時価から組み立て）の保存
+//   立花証券の日足履歴は当日分の反映が引け後18:00〜翌03:30のどこかで、日によって前後する。
+//   待たずに計算できるよう、引け後に取得した時価の 始値・高値・安値・現在値・出来高 を
+//   当日バーとして保存しておく（履歴に当日分が入ったら履歴を優先する）。
+//   取引日の15:45以降に取得した確定値だけを使う（場中の途中経過のバーは作らない）。
+//   $map: wp_stocks_tachibana_get_prices() の戻り値
+// --------------------------------------------------
+function wp_stocks_tachibana_store_today_bars(array $map) {
+    $now  = new DateTime('now', new DateTimeZone('Asia/Tokyo'));
+    $wday = (int) $now->format('w');
+    if ($wday === 0 || $wday === 6) return;
+    if (function_exists('wp_stocks_get_holidays')
+        && in_array($now->format('Y-m-d'), wp_stocks_get_holidays(), true)) {
+        return;
+    }
+    if ((int) $now->format('Hi') < 1545) return;
+
+    $date = $now->format('Y-m-d');
+    $bars = [];
+    foreach ($map as $code => $row) {
+        $o = $row['o'] ?? null;
+        $h = $row['h'] ?? null;
+        $l = $row['l'] ?? null;
+        $c = $row['c'] ?? null;
+        $v = $row['volume'] ?? null;
+        if ($o === null || $h === null || $l === null || $c === null || $v === null) continue;
+        if ($o <= 0 || $h <= 0 || $l <= 0 || $c <= 0) continue;
+        $bars[(string) $code] = [
+            'open'   => $o,
+            'high'   => $h,
+            'low'    => $l,
+            'close'  => $c,
+            'volume' => intval($v),
+        ];
+    }
+    if (!$bars) return;
+
+    // 同じ日の保存分とは銘柄単位でマージ（一部の銘柄だけ取れた回で消さない）
+    $cur = get_transient('wp_stocks_tcb_today_bars');
+    if (is_array($cur) && ($cur['date'] ?? '') === $date && !empty($cur['bars']) && is_array($cur['bars'])) {
+        $bars = array_merge($cur['bars'], $bars);
+    }
+    set_transient('wp_stocks_tcb_today_bars', ['date' => $date, 'bars' => $bars], 20 * HOUR_IN_SECONDS);
+}
+
+// --------------------------------------------------
+// 日足配列（日付昇順）に当日バーを足す
+//   - 履歴の最終日が保存日以降なら何もしない（履歴を優先）
+//   - 前営業日のバーと完全に同じ値なら、取引がなかった（休場など）とみなして足さない
+//   - 株式分割があった日は、時価が分割調整前の値のため履歴と合わないが、
+//     翌日以降は履歴（調整済み）に置き換わる
+// --------------------------------------------------
+function wp_stocks_tachibana_append_today_bar($code, array $bars) {
+    if (!$bars) return $bars;
+    $store = get_transient('wp_stocks_tcb_today_bars');
+    if (!is_array($store) || empty($store['date']) || empty($store['bars'][$code])) return $bars;
+
+    $last = end($bars);
+    if ($last['date'] >= $store['date']) return $bars;
+
+    $q = $store['bars'][$code];
+    if ($last['open'] == $q['open'] && $last['high'] == $q['high'] && $last['low'] == $q['low']
+        && $last['close'] == $q['close'] && $last['volume'] == $q['volume']) {
+        return $bars;
+    }
+
+    $bars[] = [
+        'date'   => $store['date'],
+        'open'   => $q['open'],
+        'close'  => $q['close'],
+        'high'   => $q['high'],
+        'low'    => $q['low'],
+        'volume' => intval($q['volume']),
+    ];
+    return $bars;
 }
