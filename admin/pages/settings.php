@@ -248,6 +248,10 @@ function wp_stocks_settings_page() {
             'rci_reversal_bottom', 'rci_reversal_top', 'stoch_cross_oversold', 'stoch_cross_overbought',
             'dmi_bullish', 'dmi_bearish', 'rsi_oversold', 'rsi_overbought', 'fib_near_bonus',
             'oscillator_reversal_buy', 'oscillator_reversal_sell',
+            'ichimoku_tk_cross_bullish', 'ichimoku_tk_cross_bearish',
+            'ichimoku_cloud_breakout_up', 'ichimoku_cloud_breakout_down',
+            'sar_reversal_bullish', 'sar_reversal_bearish',
+            'volume_confirm_bonus', 'volume_thin_penalty',
         ];
         $new_composite_weights = [];
         foreach ($composite_weight_keys as $wkey) {
@@ -808,6 +812,14 @@ function wp_stocks_settings_page() {
         'fib_near_bonus'           => 'フィボナッチ主要水準接近（補助点・符号は既存スコアに追従）',
         'oscillator_reversal_buy'  => 'オシレーター反転確認（RSI売られ過ぎ＋陽線反転）',
         'oscillator_reversal_sell' => 'オシレーター反転確認（RSI買われ過ぎ＋陰線反転）',
+        'ichimoku_tk_cross_bullish'     => '一目均衡表：雲の上で転換線が基準線を上抜け',
+        'ichimoku_tk_cross_bearish'     => '一目均衡表：雲の下で転換線が基準線を下抜け',
+        'ichimoku_cloud_breakout_up'    => '一目均衡表：株価が雲を上抜け',
+        'ichimoku_cloud_breakout_down'  => '一目均衡表：株価が雲を下抜け',
+        'sar_reversal_bullish'          => 'パラボリックSAR：売り→買いに反転',
+        'sar_reversal_bearish'          => 'パラボリックSAR：買い→売りに反転',
+        'volume_confirm_bonus'          => '出来高急増（平均の1.5倍以上）：既存シグナルを補強（補助点）',
+        'volume_thin_penalty'           => '出来高閑散（平均の0.7倍未満）：既存シグナルの信頼度に注意（補助点）',
     ];
 
     echo '<div style="margin-top:0;">';

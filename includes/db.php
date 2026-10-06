@@ -414,6 +414,15 @@ function wp_stocks_manager_create_tables() {
         'bandwalk_direction'       => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN bandwalk_direction VARCHAR(10) DEFAULT NULL AFTER bandwalk_detected",
         'oscillator_reversal_buy'  => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN oscillator_reversal_buy TINYINT(1) DEFAULT 0 AFTER bandwalk_direction",
         'oscillator_reversal_sell' => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN oscillator_reversal_sell TINYINT(1) DEFAULT 0 AFTER oscillator_reversal_buy",
+        // ★追加：一目均衡表（転換線・基準線・先行スパンA/B・雲の上下端・雲内外の位置）と出来高比率
+        'tenkan'         => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN tenkan FLOAT DEFAULT NULL AFTER oscillator_reversal_sell",
+        'kijun'          => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN kijun FLOAT DEFAULT NULL AFTER tenkan",
+        'senkou_a'       => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN senkou_a FLOAT DEFAULT NULL AFTER kijun",
+        'senkou_b'       => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN senkou_b FLOAT DEFAULT NULL AFTER senkou_a",
+        'cloud_top'      => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN cloud_top FLOAT DEFAULT NULL AFTER senkou_b",
+        'cloud_bottom'   => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN cloud_bottom FLOAT DEFAULT NULL AFTER cloud_top",
+        'cloud_position' => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN cloud_position TINYINT DEFAULT NULL AFTER cloud_bottom",
+        'volume_ratio'   => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN volume_ratio FLOAT DEFAULT NULL AFTER cloud_position",
     ] as $col => $sql) {
         if (!in_array($col, $tech_cols)) $wpdb->query($sql);
     }

@@ -459,6 +459,14 @@ function wp_stocks_get_composite_weights($market_cap = null) {
         'fib_near_bonus'         => 1,
         'oscillator_reversal_buy'  => 2,
         'oscillator_reversal_sell' => -2,
+        'ichimoku_tk_cross_bullish'  => 3,
+        'ichimoku_tk_cross_bearish'  => -3,
+        'ichimoku_cloud_breakout_up'   => 3,
+        'ichimoku_cloud_breakout_down' => -3,
+        'sar_reversal_bullish' => 2,
+        'sar_reversal_bearish' => -2,
+        'volume_confirm_bonus' => 1,
+        'volume_thin_penalty'  => 1,
     ];
     $saved   = get_option('wp_stocks_composite_weights', []);
     $weights = is_array($saved) ? array_merge($defaults, $saved) : $defaults;
@@ -585,6 +593,46 @@ function wp_stocks_calc_composite_score($result, $prev_row, $market_cap = null) 
         $bonus  = $score > 0 ? $w['fib_near_bonus'] : -$w['fib_near_bonus'];
         $score += $bonus;
         $detail[] = 'フィボナッチ主要水準（' . ($result['fib_level'] ?? '-') . '）に接近（' . $bonus . '点）';
+    }
+
+    // ⑧ 一目均衡表：転換線・基準線クロス（雲内外フィルター付き）
+    $tenkan      = $result['tenkan'] ?? null;
+    $kijun       = $result['kijun']  ?? null;
+    $prev_tenkan = $prev_row->tenkan ?? null;
+    $prev_kijun  = $prev_row->kijun  ?? null;
+    $cloud_pos   = $result['cloud_position'] ?? null;
+    if ($tenkan !== null && $kijun !== null && $prev_tenkan !== null && $prev_kijun !== null) {
+        $tk_cross_up   = $prev_tenkan <= $prev_kijun && $tenkan > $kijun;
+        $tk_cross_down = $prev_tenkan >= $prev_kijun && $tenkan < $kijun;
+        if ($tk_cross_up && $cloud_pos === 1)    { $score += $w['ichimoku_tk_cross_bullish']; $detail[] = '一目均衡表：雲の上で転換線が基準線を上抜け（' . $w['ichimoku_tk_cross_bullish'] . '点）'; }
+        if ($tk_cross_down && $cloud_pos === -1) { $score += $w['ichimoku_tk_cross_bearish']; $detail[] = '一目均衡表：雲の下で転換線が基準線を下抜け（' . $w['ichimoku_tk_cross_bearish'] . '点）'; }
+    }
+
+    // ⑨ 一目均衡表：雲抜け（ブレイクアウト）
+    $prev_cloud_pos = $prev_row->cloud_position ?? null;
+    if ($cloud_pos !== null && $prev_cloud_pos !== null) {
+        if ($prev_cloud_pos <= 0 && $cloud_pos === 1)  { $score += $w['ichimoku_cloud_breakout_up'];   $detail[] = '一目均衡表：株価が雲を上抜け（' . $w['ichimoku_cloud_breakout_up'] . '点）'; }
+        if ($prev_cloud_pos >= 0 && $cloud_pos === -1) { $score += $w['ichimoku_cloud_breakout_down']; $detail[] = '一目均衡表：株価が雲を下抜け（' . $w['ichimoku_cloud_breakout_down'] . '点）'; }
+    }
+
+    // ⑩ パラボリックSAR：トレンド反転
+    if (intval($result['sar_reversal'] ?? 0) === 1) {
+        if (($result['sar_trend'] ?? '') === 'up')   { $score += $w['sar_reversal_bullish']; $detail[] = 'パラボリックSAR：売り→買いに反転（' . $w['sar_reversal_bullish'] . '点）'; }
+        if (($result['sar_trend'] ?? '') === 'down') { $score += $w['sar_reversal_bearish']; $detail[] = 'パラボリックSAR：買い→売りに反転（' . $w['sar_reversal_bearish'] . '点）'; }
+    }
+
+    // ⑪ 出来高：急増時は既存シグナルを補強、閑散時は既存シグナルの信頼度に注意（フィボナッチと同じ「既存方向への補助」方式）
+    $vol_ratio = $result['volume_ratio'] ?? null;
+    if ($vol_ratio !== null && $score !== 0) {
+        if ($vol_ratio >= 1.5) {
+            $bonus  = $score > 0 ? $w['volume_confirm_bonus'] : -$w['volume_confirm_bonus'];
+            $score += $bonus;
+            $detail[] = '出来高急増（平均の' . number_format($vol_ratio, 1) . '倍）を伴う動き（' . $bonus . '点）';
+        } elseif ($vol_ratio < 0.7) {
+            $penalty = $score > 0 ? -$w['volume_thin_penalty'] : $w['volume_thin_penalty'];
+            $score  += $penalty;
+            $detail[] = '出来高が閑散（平均の' . number_format($vol_ratio, 1) . '倍）：動きの信頼度に注意（' . $penalty . '点）';
+        }
     }
 
     // --- 判定ラベル（5段階・閾値は設定ページで調整可能） ---

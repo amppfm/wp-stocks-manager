@@ -415,6 +415,52 @@ function wp_stocks_detect_candle_pattern($data) {
 // --------------------------------------------------
 // ストキャスティクス（Slow %K・%D）
 // --------------------------------------------------
+// --------------------------------------------------
+// 一目均衡表（転換線9・基準線26・先行スパンA/B・雲）
+// 雲（先行スパンA/B）は26日先行表示のため、「今日の雲」は26日前時点のデータから計算する。
+// 52日(先行スパンB)+26日(先行シフト)=最低78日分の高値・安値が必要。不足時はnullを返す。
+// --------------------------------------------------
+function wp_stocks_calc_ichimoku($closes, $highs, $lows) {
+    $n = count($closes);
+    if ($n < 78 || count($highs) < 78 || count($lows) < 78) return null;
+
+    $donchian_mid = function($highs, $lows, $end_idx, $period) {
+        $start = $end_idx - $period + 1;
+        if ($start < 0) return null;
+        $h = array_slice($highs, $start, $period);
+        $l = array_slice($lows,  $start, $period);
+        if (count($h) < $period || count($l) < $period) return null;
+        return [max($h), min($l), (max($h) + min($l)) / 2];
+    };
+
+    $last = $n - 1;
+    $d9  = $donchian_mid($highs, $lows, $last, 9);
+    $d26 = $donchian_mid($highs, $lows, $last, 26);
+    if ($d9 === null || $d26 === null) return null;
+    $tenkan = $d9[2];
+    $kijun  = $d26[2];
+
+    // 先行スパンは26日前時点の値を「今日の雲」として使う（26日先行表示されたものを現在に引き直す）
+    $idx_26ago = $last - 26;
+    if ($idx_26ago < 0) return null;
+    $d9_26  = $donchian_mid($highs, $lows, $idx_26ago, 9);
+    $d26_26 = $donchian_mid($highs, $lows, $idx_26ago, 26);
+    $d52_26 = $donchian_mid($highs, $lows, $idx_26ago, 52);
+    if ($d9_26 === null || $d26_26 === null || $d52_26 === null) return null;
+
+    $senkou_a = ($d9_26[2] + $d26_26[2]) / 2;
+    $senkou_b = $d52_26[2];
+
+    return [
+        'tenkan'   => round($tenkan, 1),
+        'kijun'    => round($kijun, 1),
+        'senkou_a' => round($senkou_a, 1),
+        'senkou_b' => round($senkou_b, 1),
+        'cloud_top'    => round(max($senkou_a, $senkou_b), 1),
+        'cloud_bottom' => round(min($senkou_a, $senkou_b), 1),
+    ];
+}
+
 function wp_stocks_calc_stochastic($closes, $highs, $lows, $period = 14, $smooth = 3) {
     $n = count($closes);
     if ($n < $period + $smooth) return [null, null];
@@ -538,6 +584,28 @@ function wp_stocks_save_technicals($stock_id, $symbol) {
     $result['sar_reversal'] = $sar_reversal ? 1 : 0;
     $result['fib_level']    = $fib_level;
     $result['fib_near']     = $fib_near ? 1 : 0;
+
+    // ★追加：一目均衡表（転換線・基準線・雲）。78日分に満たない銘柄はnullのまま（N/A扱い）
+    $ichimoku = wp_stocks_calc_ichimoku($closes, $highs, $lows);
+    if ($ichimoku) {
+        $result = array_merge($result, $ichimoku);
+        $last_close = end($closes);
+        if     ($last_close > $ichimoku['cloud_top'])    $result['cloud_position'] = 1;  // 雲の上
+        elseif ($last_close < $ichimoku['cloud_bottom']) $result['cloud_position'] = -1; // 雲の下
+        else                                               $result['cloud_position'] = 0;  // 雲の中
+    } else {
+        $result['tenkan'] = $result['kijun'] = $result['senkou_a'] = $result['senkou_b'] = null;
+        $result['cloud_top'] = $result['cloud_bottom'] = $result['cloud_position'] = null;
+    }
+
+    // ★追加：出来高比率（直近20日平均に対する当日出来高の倍率）
+    $volumes = array_column($data, 'volume');
+    if (count($volumes) >= 20) {
+        $vol_avg20 = array_sum(array_slice($volumes, -20)) / 20;
+        $result['volume_ratio'] = $vol_avg20 > 0 ? round(end($volumes) / $vol_avg20, 2) : null;
+    } else {
+        $result['volume_ratio'] = null;
+    }
 
     // ★変更：複合判定（論点2）のため、上書きされる前の行を丸ごと取得しておく
     $existing_row = $wpdb->get_row($wpdb->prepare(
