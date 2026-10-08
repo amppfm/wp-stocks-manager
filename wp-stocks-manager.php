@@ -27,7 +27,6 @@ define('WP_STOCKS_PLUGIN_DIR', plugin_dir_path(__FILE__));
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/webull.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/edgar.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/fmp.php';
-require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/edinet.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/jpx.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/tachibana.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/yahoo-scraping.php';

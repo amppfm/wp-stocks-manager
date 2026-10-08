@@ -167,10 +167,6 @@ function wp_stocks_settings_page() {
         // 米国株テクニカル計算時刻
         $us_technical_time = sanitize_text_field($_POST['us_technical_time'] ?? '07:30');
 
-        // EDINET APIキー保存
-        $edinet_api_key = sanitize_text_field($_POST['edinet_api_key'] ?? '');
-        update_option('wp_stocks_edinet_api_key', $edinet_api_key);
-
         // FMP APIキー保存（米国株 財務スコアカード）
         $fmp_api_key = sanitize_text_field($_POST['fmp_api_key'] ?? '');
 		update_option('wp_stocks_fmp_api_key', $fmp_api_key);
@@ -402,45 +398,6 @@ function wp_stocks_settings_page() {
         $wss_first = false;
     }
     echo '</ul>';
-
-    // ------------------------------------------------------------------
-    // 【手動実行タブ・前半】EDINETコードリスト（独立フォームのためform外に設置）
-    // ------------------------------------------------------------------
-    echo '<div class="wp-stocks-settings-panel" data-panel="manual" style="display:none;">';
-
-    // EDINETコードリスト アップロード（証券コード⇔EDINETコード 高速解決用キャッシュ）
-    if (isset($_GET['message']) && $_GET['message'] === 'edinet_list_saved') {
-        echo '<div class="updated"><p>EDINETコードリストを更新しました（' . intval($_GET['n'] ?? 0) . '件登録）。</p></div>';
-    }
-    if (isset($_GET['message']) && $_GET['message'] === 'edinet_list_error') {
-        echo '<div class="error"><p>EDINETコードリストの読み込みに失敗しました。ZIP/CSVファイルの形式をご確認ください。</p></div>';
-    }
-    $edinet_codelist          = get_option('wp_stocks_edinet_codelist', []);
-    $edinet_codelist_count    = is_array($edinet_codelist) ? count($edinet_codelist) : 0;
-    $edinet_codelist_updated  = get_option('wp_stocks_edinet_codelist_updated_at', '');
-    echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;max-width:700px;">';
-    echo '<h2 style="margin-top:0;">📇 EDINETコードリスト（証券コード⇔EDINETコード対応表）</h2>';
-    echo '<p class="description">EDINETは証券コードから直接検索できないため、通常は書類の提出日を1日ずつ総当たりでEDINETコードを探しますが、提出日がずれていると見つからず失敗します。<br>';
-    echo 'EDINET公式サイトの<a href="https://disclosure2.edinet-fsa.go.jp/weee0010.aspx" target="_blank">「EDINETタクソノミ及びコードリストダウンロード」</a>ページから取得できる「EDINETコードリスト」（ZIPまたはCSV）を一度アップロードしておくと、以後はこの対応表から即座に正確なEDINETコードを解決できるようになります。</p>';
-    echo '<p style="font-weight:bold;">現在の登録件数：' . number_format($edinet_codelist_count) . '件';
-    if ($edinet_codelist_updated) echo '　（最終更新：' . esc_html($edinet_codelist_updated) . '）';
-    echo '</p>';
-    echo '<p style="background:#e8f8e8;border:1px solid #27ae60;border-radius:4px;padding:10px;font-size:13px;">✅ 2026-07-14時点で、EDINET公式配布ZIPを自動ダウンロードできることを確認済みです。下のボタンでワンクリック更新できます。</p>';
-    echo '<form method="post" action="' . admin_url('admin-post.php') . '" style="margin-bottom:12px;">';
-    echo '<input type="hidden" name="action" value="download_edinet_codelist">';
-    wp_nonce_field('wp_stocks_edinet_codelist_download_nonce');
-    echo '<button type="submit" class="button button-primary">🔄 今すぐ自動ダウンロードして更新</button>';
-    echo '</form>';
-    echo '<p class="description" style="margin:12px 0 4px 0;">うまくいかない場合は、以下から手動でアップロードすることもできます。</p>';
-    echo '<form method="post" action="' . admin_url('admin-post.php') . '" enctype="multipart/form-data">';
-    echo '<input type="hidden" name="action" value="upload_edinet_codelist">';
-    wp_nonce_field('wp_stocks_edinet_codelist_nonce');
-    echo '<input type="file" name="edinet_codelist_file" accept=".zip,.csv" required style="margin-bottom:8px;display:block;">';
-    echo '<button type="submit" class="button">アップロードして登録</button>';
-    echo '</form>';
-    echo '</div>';
-
-    echo '</div>'; // end panel: manual (前半)
 
     // ------------------------------------------------------------------
     // 【ニュースRSSタブ】マーケット情報ページ用フィード設定（独立フォームのためform外に設置）
@@ -676,13 +633,6 @@ function wp_stocks_settings_page() {
     echo '<tr><th>J-Quants APIキー</th><td>';
 	echo '<input type="text" name="jquants_api_key" value="' . esc_attr($jquants_api_key) . '" style="width:400px;" autocomplete="new-password">';
     echo '<p class="description">J-Quants（無料プラン）のダッシュボードから発行したAPIキーを入力してください。予想EPS・PER/PBR等の取得に使用します（取得データは最大12週間遅延）。</p>';
-    echo '</td></tr>';
-
-    // EDINET APIキー設定
-    $edinet_api_key = get_option('wp_stocks_edinet_api_key', '');
-    echo '<tr><th>EDINET APIキー</th><td>';
-    echo '<input type="text" name="edinet_api_key" value="' . esc_attr($edinet_api_key) . '" style="width:350px;" placeholder="例：115c8e8db7654e1bbbda5de21c2f5a8a">';
-    echo '<p class="description">EDINETから財務データを取得するためのAPIキーです。<a href="https://disclosure2.edinet-fsa.go.jp/" target="_blank">EDINETサイト</a>で取得できます。</p>';
     echo '</td></tr>';
 
     // Financial Modeling Prep (FMP) APIキー設定（米国株 財務スコアカード：PER/PBR/ROE等）

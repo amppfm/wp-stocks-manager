@@ -540,90 +540,6 @@ add_action('admin_post_update_stock_code', function() {
 });
 
 
-add_action('admin_post_download_edinet_codelist', function() {
-    wp_stocks_require_admin_action('wp_stocks_edinet_codelist_download_nonce');
-
-    $content = wp_stocks_download_edinet_codelist();
-    if (empty($content)) {
-        wp_redirect(admin_url('admin.php?page=wp-stocks-settings&message=edinet_list_error'));
-        exit;
-    }
-    $n = wp_stocks_save_edinet_codelist_content($content, '自動ダウンロード');
-    if ($n === false) {
-        wp_redirect(admin_url('admin.php?page=wp-stocks-settings&message=edinet_list_error'));
-        exit;
-    }
-    wp_redirect(admin_url('admin.php?page=wp-stocks-settings&message=edinet_list_saved&n=' . $n));
-    exit;
-});
-
-add_action('admin_post_upload_edinet_codelist', function() {
-    wp_stocks_require_admin_action('wp_stocks_edinet_codelist_nonce');
-
-    if (empty($_FILES['edinet_codelist_file']['tmp_name'])) {
-        wp_redirect(admin_url('admin.php?page=wp-stocks-settings&message=edinet_list_error'));
-        exit;
-    }
-
-    $tmp_path  = $_FILES['edinet_codelist_file']['tmp_name'];
-    $orig_name = $_FILES['edinet_codelist_file']['name'] ?? '';
-    $content   = '';
-
-    if (preg_match('/\.zip$/i', $orig_name)) {
-        if (class_exists('ZipArchive')) {
-            $zip = new ZipArchive();
-            if ($zip->open($tmp_path) === true) {
-                for ($i = 0; $i < $zip->numFiles; $i++) {
-                    $name = $zip->getNameIndex($i);
-                    if (stripos($name, '.csv') !== false) {
-                        $content = $zip->getFromIndex($i);
-                        break;
-                    }
-                }
-                $zip->close();
-            }
-        }
-        if (empty($content) && class_exists('PharData')) {
-            try {
-                $phar = new PharData($tmp_path);
-                foreach (new RecursiveIteratorIterator($phar) as $file) {
-                    if (stripos($file->getPathname(), '.csv') !== false) {
-                        $content = file_get_contents($file->getPathname());
-                        break;
-                    }
-                }
-            } catch (Throwable $e) {
-                wp_stocks_log('error', 'edinet_codelist', 'ALL', 'ZIP展開失敗: ' . $e->getMessage());
-            }
-        }
-    } else {
-        $content = file_get_contents($tmp_path);
-    }
-
-    if (empty($content)) {
-        wp_stocks_log('error', 'edinet_codelist', 'ALL', 'アップロードされたファイルからCSVを読み取れませんでした');
-        wp_redirect(admin_url('admin.php?page=wp-stocks-settings&message=edinet_list_error'));
-        exit;
-    }
-
-    $parsed = wp_stocks_parse_edinet_codelist_csv($content);
-    $map    = $parsed['edinet']  ?? [];
-    $decmap = $parsed['decdate'] ?? [];
-    if (empty($map)) {
-        wp_stocks_log('error', 'edinet_codelist', 'ALL', 'CSVのパースに失敗、または0件でした（フォーマットを確認してください）');
-        wp_redirect(admin_url('admin.php?page=wp-stocks-settings&message=edinet_list_error'));
-        exit;
-    }
-
-    update_option('wp_stocks_edinet_codelist', $map, false);
-    update_option('wp_stocks_edinet_decdate_map', $decmap, false);
-    update_option('wp_stocks_edinet_codelist_updated_at', current_time('mysql'));
-    wp_stocks_log('info', 'edinet_codelist', 'ALL', 'EDINETコードリストを更新しました（' . count($map) . '件、決算日情報' . count($decmap) . '件）');
-
-    wp_redirect(admin_url('admin.php?page=wp-stocks-settings&message=edinet_list_saved&n=' . count($map)));
-    exit;
-});
-
 // ★2026-09-26廃止：admin_post_fetch_financials（EDINET年間財務データ取得ボタン）は
 // wp_stocks_fetch_financials()の削除に伴い削除。「年間」セクションはJ-Quantsの
 // admin_post_fetch_quarterly_financials_jquants（四半期取得と共通）に統合された。
@@ -784,27 +700,6 @@ add_action('admin_post_wp_stocks_fmp_test_fetch', function() {
             echo str_pad($k, 20) . ": " . (is_null($v) ? 'null' : $v) . "\n";
         }
     }
-    exit;
-});
-
-add_action('admin_post_diagnose_half_year', function() {
-    $stock_id = intval($_GET['stock_id'] ?? 0);
-    wp_stocks_require_admin_action('wp_stocks_diag_half_' . $stock_id);
-    global $wpdb;
-    $stock = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}stocks WHERE id = %d", $stock_id));
-    if (!$stock) wp_die('銘柄が見つかりません');
-    wp_stocks_diagnose_half_year_report($stock_id, $stock->code);
-    wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $stock_id . '&ctab=finance&ftab=half&message=diag_done'));
-    exit;
-});
-add_action('admin_post_fetch_half_year_financials', function() {
-    $stock_id = intval($_GET['stock_id'] ?? 0);
-    wp_stocks_require_admin_action('wp_stocks_fetch_half_' . $stock_id);
-    global $wpdb;
-    $stock = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}stocks WHERE id = %d", $stock_id));
-    if (!$stock) wp_die('銘柄が見つかりません');
-    $result = wp_stocks_fetch_half_year_financials($stock_id, $stock->code);
-    wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $stock_id . '&ctab=finance&ftab=half&message=' . ($result ? 'fin_saved' : 'fin_error')));
     exit;
 });
 
