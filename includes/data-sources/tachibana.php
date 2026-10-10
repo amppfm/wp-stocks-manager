@@ -607,10 +607,28 @@ function wp_stocks_tachibana_news_fetch_day($ymd) {
         return $result;
     }
 
+    if (!is_array($res)) $res = [];
     $rows = $res['aCLMMfdsNews'] ?? [];
     if (!is_array($rows)) $rows = [];
+    $api_code  = trim((string)($res['sResultCode'] ?? ''));
+    $api_errno = trim((string)($res['p_errno'] ?? ''));
+    $api_text  = trim((string)($res['sResultText'] ?? ($res['p_err'] ?? '')));
+    $api_keys  = implode(',', array_slice(array_keys($res), 0, 8));
     unset($res);
     $result['rows'] = count($rows);
+
+    // 0件のときは応答の中身を残す（APIエラーの見落とし防止）
+    if ($result['rows'] === 0) {
+        $api_ng = ($api_code !== '' && $api_code !== '0') || ($api_errno !== '' && $api_errno !== '0');
+        $detail = sprintf('応答: sResultCode=%s p_errno=%s text=%s keys=%s', $api_code, $api_errno, $api_text, $api_keys);
+        if ($api_ng) {
+            $result['error'] = $detail;
+            wp_stocks_tachibana_log('error', 'news', 'ニュース ' . $ymd . ': 0件・APIエラー応答 ' . $detail);
+        } else {
+            wp_stocks_tachibana_log('info', 'news', 'ニュース ' . $ymd . ': 0件（' . $detail . '）');
+        }
+        return $result;
+    }
 
     $table    = wp_stocks_tachibana_news_table();
     $date_sql = substr($ymd, 0, 4) . '-' . substr($ymd, 4, 2) . '-' . substr($ymd, 6, 2);
@@ -703,15 +721,27 @@ function wp_stocks_tachibana_news_cleanup() {
     return ['cutoff' => $cutoff, 'deleted' => (int)$n];
 }
 
-// 定時実行: 'today' = 当日分、'catchup' = 前日分（夜間配信の補完）。取得後に古い分を削除
+// 定時実行: 'today' = 当日分、'catchup' = 直近N営業日分の取り直し（夜間配信の補完）。取得後に古い分を削除
 function wp_stocks_tachibana_news_run($which) {
     if (get_transient('wp_stocks_tcn_lock')) return null;
     set_transient('wp_stocks_tcn_lock', 1, 10 * MINUTE_IN_SECONDS);
 
-    $d = new DateTime('now', new DateTimeZone('Asia/Tokyo'));
-    if ($which === 'catchup') $d->modify('-1 day');
-
-    $r = wp_stocks_tachibana_news_fetch_day($d->format('Ymd'));
+    $tz = new DateTimeZone('Asia/Tokyo');
+    if ($which === 'catchup') {
+        // 今日より前の直近N営業日（土日除く）を取り直す。既存行はスキップされる
+        $n = max(1, min(5, (int)get_option('wp_stocks_tcn_catchup_bdays', 2)));
+        $d = new DateTime('today', $tz);
+        $r = [];
+        for ($i = 0; $i < 14 && count($r) < $n; $i++) {
+            $d->modify('-1 day');
+            if ((int)$d->format('N') >= 6) continue;
+            if (count($r) > 0) sleep(2);
+            $r[] = wp_stocks_tachibana_news_fetch_day($d->format('Ymd'));
+        }
+    } else {
+        $d = new DateTime('now', $tz);
+        $r = wp_stocks_tachibana_news_fetch_day($d->format('Ymd'));
+    }
     wp_stocks_tachibana_news_cleanup();
 
     delete_transient('wp_stocks_tcn_lock');
@@ -744,9 +774,22 @@ add_action('wp_stocks_tcn_catchup_event', function () {
     wp_stocks_tachibana_news_run('catchup');
 });
 
+// 設定変更後に呼ぶ: 登録済みのイベントを解除して、保存済みの時刻で登録し直す
+function wp_stocks_tachibana_news_reschedule() {
+    foreach (['wp_stocks_tcn_fetch_event', 'wp_stocks_tcn_catchup_event'] as $hook) {
+        wp_clear_scheduled_hook($hook);
+    }
+    wp_stocks_tachibana_news_schedule();
+}
+
 function wp_stocks_tachibana_news_schedule() {
     $tz     = new DateTimeZone('Asia/Tokyo');
-    $events = ['wp_stocks_tcn_fetch_event' => '21:00', 'wp_stocks_tcn_catchup_event' => '07:30'];
+    $re = '/^([01]\d|2[0-3]):[0-5]\d$/';
+    $fetch_hm   = (string)get_option('wp_stocks_tcn_fetch_time', '21:00');
+    $catchup_hm = (string)get_option('wp_stocks_tcn_catchup_time', '07:30');
+    if (!preg_match($re, $fetch_hm))   $fetch_hm   = '21:00';
+    if (!preg_match($re, $catchup_hm)) $catchup_hm = '07:30';
+    $events = ['wp_stocks_tcn_fetch_event' => $fetch_hm, 'wp_stocks_tcn_catchup_event' => $catchup_hm];
     foreach ($events as $hook => $hm) {
         if (wp_next_scheduled($hook)) continue;
         $t = new DateTime('today ' . $hm, $tz);

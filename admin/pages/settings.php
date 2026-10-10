@@ -346,6 +346,23 @@ function wp_stocks_settings_page() {
         }
         echo '<div class="updated"><p>ニュースRSS設定を保存しました。</p></div>';
     }
+    // 立花ニュース設定の保存
+    if (isset($_POST['wp_stocks_save_tcn'])) {
+        check_admin_referer('wp_stocks_tcn_nonce');
+        $tcn_re = '/^([01]\d|2[0-3]):[0-5]\d$/';
+        $tcn_t1 = sanitize_text_field($_POST['tcn_fetch_time'] ?? '');
+        $tcn_t2 = sanitize_text_field($_POST['tcn_catchup_time'] ?? '');
+        if (!preg_match($tcn_re, $tcn_t1) || !preg_match($tcn_re, $tcn_t2)) {
+            echo '<div class="error"><p>取得時刻は HH:MM 形式で指定してください。</p></div>';
+        } else {
+            update_option('wp_stocks_tcn_fetch_time', $tcn_t1);
+            update_option('wp_stocks_tcn_catchup_time', $tcn_t2);
+            update_option('wp_stocks_tcn_catchup_bdays', max(1, min(5, intval($_POST['tcn_catchup_bdays'] ?? 2))));
+            update_option('wp_stocks_tcn_retention_bdays', max(1, min(30, intval($_POST['tcn_retention_bdays'] ?? 7))));
+            if (function_exists('wp_stocks_tachibana_news_reschedule')) wp_stocks_tachibana_news_reschedule();
+            echo '<div class="updated"><p>立花ニュース設定を保存し、取得スケジュールを組み直しました。</p></div>';
+        }
+    }
     // バックフィル完了メッセージ
     if (isset($_GET['message']) && $_GET['message'] === 'backfill_done') {
         echo '<div class="updated"><p>過去株価のバックフィルが完了しました（' . intval($_GET['n'] ?? 0) . '件挿入）。</p></div>';
@@ -386,6 +403,7 @@ function wp_stocks_settings_page() {
         'maintenance' => '🧹 データメンテナンス',
         'api'         => '🔑 外部API連携',
         'news'        => '📰 ニュースRSS',
+        'tcn'         => '📡 立花ニュース',
         'signal'      => '🎯 複合シグナル判定',
     ];
     echo '<ul class="wp-stocks-settings-tabs" style="display:flex;gap:0;border-bottom:2px solid #0073aa;margin:0 0 20px 0;padding:0;list-style:none;flex-wrap:wrap;">';
@@ -424,6 +442,47 @@ function wp_stocks_settings_page() {
     echo '</div>';
 
     echo '</div>'; // end panel: news
+
+    // ------------------------------------------------------------------
+    // 【立花ニュースタブ】取得時刻・保持期間の設定（独立フォーム）
+    // ------------------------------------------------------------------
+    $tcn_next = function ($hook) {
+        $ts = wp_next_scheduled($hook);
+        return $ts ? wp_date('Y/m/d H:i', $ts, new DateTimeZone('Asia/Tokyo')) : '未登録';
+    };
+    echo '<div class="wp-stocks-settings-panel" data-panel="tcn" style="display:none;">';
+    echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:20px;max-width:750px;">';
+    echo '<h2 style="margin-top:0;">&#x1F4E1; 立花ニュース取得設定</h2>';
+    echo '<p class="description">立花証券APIから取得するニュースの取得時刻と保持期間です（日本時間）。保存すると取得スケジュールを組み直します。取得はWP-cronで動くため、その時刻前後にサイトへのアクセスが無いと実行が遅れることがあります。</p>';
+    echo '<form method="post">';
+    wp_nonce_field('wp_stocks_tcn_nonce');
+    echo '<table class="form-table"><tbody>';
+
+    echo '<tr><th>当日分の取得時刻</th><td>';
+    echo '<input type="time" name="tcn_fetch_time" value="' . esc_attr(get_option('wp_stocks_tcn_fetch_time', '21:00')) . '" style="width:120px;">';
+    echo '<p class="description">毎日この時刻に当日分のニュースを取得します。<br>次回実行予定：' . esc_html($tcn_next('wp_stocks_tcn_fetch_event')) . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th>追い込みの取得時刻</th><td>';
+    echo '<input type="time" name="tcn_catchup_time" value="' . esc_attr(get_option('wp_stocks_tcn_catchup_time', '07:30')) . '" style="width:120px;">';
+    echo '<p class="description">毎日この時刻に過去分を取り直し、夜間に配信された分を補います。既存の記事は重複して保存されません。<br>次回実行予定：' . esc_html($tcn_next('wp_stocks_tcn_catchup_event')) . '</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th>追い込みの対象日数</th><td>';
+    echo '<input type="number" name="tcn_catchup_bdays" min="1" max="5" value="' . esc_attr((int)get_option('wp_stocks_tcn_catchup_bdays', 2)) . '" style="width:80px;"> 営業日';
+    echo '<p class="description">追い込み時に、今日より前の直近N営業日（土日を除く）を取り直します。2なら、月曜朝は金曜と木曜が対象です。日数を増やすとAPI呼び出しも増えます（1〜5）。</p>';
+    echo '</td></tr>';
+
+    echo '<tr><th>保持日数</th><td>';
+    echo '<input type="number" name="tcn_retention_bdays" min="1" max="30" value="' . esc_attr((int)get_option('wp_stocks_tcn_retention_bdays', 7)) . '" style="width:80px;"> 営業日';
+    echo '<p class="description">取得のたびに、これより古いニュースを削除します（当日を含む直近N営業日を保持）。</p>';
+    echo '</td></tr>';
+
+    echo '</tbody></table>';
+    echo '<p><button type="submit" name="wp_stocks_save_tcn" class="button button-primary">立花ニュース設定を保存</button></p>';
+    echo '</form>';
+    echo '</div>';
+    echo '</div>'; // end panel: tcn
 
     // ------------------------------------------------------------------
     // メイン設定フォーム（スケジュール／手動実行／メンテナンス／外部API連携後半／複合シグナル判定）
