@@ -512,7 +512,7 @@ function wp_stocks_nws_badge($total) {
 }
 
 function wp_stocks_news_company_box($stock) {
-    $symbol = is_object($stock) ? ($stock->symbol ?? '') : (string)$stock;
+    $symbol = is_object($stock) ? ($stock->code ?? ($stock->symbol ?? '')) : (string)$stock;
     $code = wp_stocks_nws_normalize_symbol($symbol);
     if (!wp_stocks_nws_is_jp_code($code)) return;
     wp_stocks_nws_maybe_classify();
@@ -537,7 +537,7 @@ function wp_stocks_news_company_box($stock) {
         }
         echo '</tbody></table>';
     }
-    echo '<p class="description" style="margin:8px 0 0;"><a href="' . esc_url(admin_url('admin.php?page=' . WP_STOCKS_NWS_PAGE)) . '">ニュース加減点の一覧・設定</a></p>';
+    echo '<p class="description" style="margin:8px 0 0;"><a href="' . esc_url(wp_stocks_nws_tab_url()) . '">ニュース加減点の一覧・設定</a></p>';
     echo '</div>';
 }
 
@@ -558,7 +558,8 @@ add_action('admin_notices', function () {
     if (!$stock) {
         foreach (['symbol', 'code'] as $k) {
             if (!empty($_GET[$k])) {
-                $stock = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$t} WHERE symbol = %s", sanitize_text_field(wp_unslash($_GET[$k]))));
+                $v = sanitize_text_field(wp_unslash($_GET[$k]));
+                $stock = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$t} WHERE code = %s OR code = %s", $v, preg_replace('/\.T$/i', '', $v) . '.T'));
                 break;
             }
         }
@@ -570,18 +571,21 @@ add_action('admin_notices', function () {
 // 管理画面：ニュース加減点（ランキング・手動登録・設定）
 // ============================================================
 
-add_action('admin_menu', function () {
-    global $menu;
-    $parent = '';
-    foreach ((array)$menu as $m) {
-        if (!empty($m[2]) && (strpos($m[2], 'wp-stocks') === 0 || strpos($m[2], 'wp_stocks') === 0)) { $parent = $m[2]; break; }
+// 設定ページ（タブ）のURL。ニュース加減点は設定ページの「📰 ニュース加減点」タブに統合した
+function wp_stocks_nws_tab_url(array $args = []) {
+    return add_query_arg(array_merge(['page' => 'wp-stocks-settings', 'tab' => 'nws'], $args), admin_url('admin.php'));
+}
+
+// 旧URL（独立ページ）へのアクセスは、設定ページのタブへ転送する
+add_action('admin_init', function () {
+    if (!isset($_GET['page']) || sanitize_key($_GET['page']) !== WP_STOCKS_NWS_PAGE) return;
+    $args = [];
+    foreach (['all', 'msg'] as $k) {
+        if (isset($_GET[$k])) $args[$k] = sanitize_text_field(wp_unslash($_GET[$k]));
     }
-    if ($parent !== '') {
-        add_submenu_page($parent, 'ニュース加減点', '📰 ニュース加減点', 'manage_options', WP_STOCKS_NWS_PAGE, 'wp_stocks_nws_page');
-    } else {
-        add_menu_page('ニュース加減点', 'ニュース加減点', 'manage_options', WP_STOCKS_NWS_PAGE, 'wp_stocks_nws_page', 'dashicons-megaphone', 59);
-    }
-}, 99);
+    wp_safe_redirect(wp_stocks_nws_tab_url($args));
+    exit;
+});
 
 add_action('admin_post_wp_stocks_nws_action', 'wp_stocks_nws_handle_action');
 
@@ -640,11 +644,11 @@ function wp_stocks_nws_handle_action() {
         if ($id > 0) $wpdb->query($wpdb->prepare("DELETE FROM {$ev_t} WHERE id = %d AND source = 'manual'", $id));
         $msg = 'manual_deleted';
     }
-    wp_safe_redirect(add_query_arg(['page' => WP_STOCKS_NWS_PAGE, 'msg' => $msg], admin_url('admin.php')));
+    wp_safe_redirect(wp_stocks_nws_tab_url(['msg' => $msg]));
     exit;
 }
 
-function wp_stocks_nws_page() {
+function wp_stocks_nws_page($embedded = false) {
     global $wpdb;
     if (!current_user_can('manage_options')) return;
     wp_stocks_nws_ensure_table();
@@ -654,7 +658,11 @@ function wp_stocks_nws_page() {
     $ev_t = wp_stocks_nws_events_table();
     $show_all = !empty($_GET['all']);
 
-    echo '<div class="wrap"><h1>&#x1F4F0; ニュース加減点</h1>';
+    if ($embedded) {
+        echo '<div class="wp-stocks-nws-embed">';
+    } else {
+        echo '<div class="wrap"><h1>&#x1F4F0; ニュース加減点</h1>';
+    }
 
     // メッセージ
     $msg = isset($_GET['msg']) ? sanitize_text_field(wp_unslash($_GET['msg'])) : '';
@@ -674,7 +682,7 @@ function wp_stocks_nws_page() {
     $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE status IN ('watch','portfolio')");
     $list = [];
     foreach ((array)$stocks as $s) {
-        $code = wp_stocks_nws_normalize_symbol($s->symbol ?? '');
+        $code = wp_stocks_nws_normalize_symbol($s->code ?? ($s->symbol ?? ''));
         if (!wp_stocks_nws_is_jp_code($code)) continue;
         $sc = $scores[$code] ?? ['total' => 0.0, 'items' => []];
         if (!$show_all && abs($sc['total']) < 0.05 && !array_filter($sc['items'], function ($i) { return $i['counted']; })) continue;
@@ -685,8 +693,8 @@ function wp_stocks_nws_page() {
     echo '<h2 style="margin-top:20px;">登録銘柄のニューススコア</h2>';
     echo '<p class="description">直近30日のニュースを、営業日の経過で減衰（0〜3日100%／4〜7日70%／8〜14日40%／15日以降0）させて合計。保有・ウォッチの日本株が対象です。 ';
     echo $show_all
-        ? '<a href="' . esc_url(admin_url('admin.php?page=' . WP_STOCKS_NWS_PAGE)) . '">加減点のある銘柄だけ表示</a>'
-        : '<a href="' . esc_url(admin_url('admin.php?page=' . WP_STOCKS_NWS_PAGE . '&all=1')) . '">全銘柄を表示</a>';
+        ? '<a href="' . esc_url(wp_stocks_nws_tab_url()) . '">加減点のある銘柄だけ表示</a>'
+        : '<a href="' . esc_url(wp_stocks_nws_tab_url(['all' => 1])) . '">全銘柄を表示</a>';
     echo '</p>';
     if (!$list) {
         echo '<p>加減点のある登録銘柄はありません。</p>';
