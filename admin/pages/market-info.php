@@ -103,14 +103,221 @@ function wp_stocks_render_news_feed_list($url, $limit = 20) {
     echo '</div>';
 }
 
+// --------------------------------------------------
+// マーケット情報「立花ニュース」タブ（RSSとは独立。wp_stock_tachibana_news を表示）
+// 見出し先頭のタグで種別分類: 市況(NQN/QUICK)・決算(決算/TDnet AI)・AI市況・開示要約(category=129)・その他
+// --------------------------------------------------
+function wp_stocks_render_tachibana_news_tab() {
+    global $wpdb;
+    if (!function_exists('wp_stocks_tachibana_news_table')) {
+        echo '<p style="color:#888;">立花証券ニュースの機能が読み込まれていません。</p>';
+        return;
+    }
+    $table = wp_stocks_tachibana_news_table();
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) !== $table) {
+        echo '<p style="color:#888;">ニュース用テーブルがまだありません。</p>';
+        return;
+    }
+    $dates = $wpdb->get_results("SELECT news_date, COUNT(*) AS c FROM {$table} GROUP BY news_date ORDER BY news_date DESC");
+    if (empty($dates)) {
+        echo '<p style="color:#888;">保存されたニュースがありません。</p>';
+        return;
+    }
+    $date_list = array_map(function ($d) { return $d->news_date; }, $dates);
+
+    $cat_labels = [
+        'all'   => 'すべて',
+        'mkt'   => '市況',
+        'earn'  => '決算',
+        'aimkt' => 'AI市況',
+        'disc'  => '開示要約',
+        'other' => 'その他',
+    ];
+    // 種別判定（排他）。%を使わずLOCATEで先頭一致を見る
+    $grp_sql = "CASE WHEN category = '129' THEN 'disc' WHEN LOCATE('<AI市況>', headline) = 1 THEN 'aimkt' WHEN LOCATE('<決算>', headline) = 1 OR LOCATE('<TDnet>AI:', headline) = 1 THEN 'earn' WHEN LOCATE('<NQN>', headline) = 1 OR LOCATE('<QUICK>', headline) = 1 THEN 'mkt' ELSE 'other' END";
+
+    $tdate = sanitize_text_field($_GET['tdate'] ?? '');
+    if (!in_array($tdate, $date_list, true)) $tdate = $date_list[0];
+    $tcat = sanitize_text_field($_GET['tcat'] ?? 'all');
+    if (!isset($cat_labels[$tcat])) $tcat = 'all';
+    $tq  = trim(sanitize_text_field(wp_unslash($_GET['tq'] ?? '')));
+    $tp  = max(1, intval($_GET['tp'] ?? 1));
+    $per = 100;
+    $base = admin_url('admin.php?page=wp-stocks-market&mtab=tcnews');
+
+    $btn = function ($label, $url, $active) {
+        return '<a href="' . esc_url($url) . '" style="padding:6px 14px;border-radius:4px;text-decoration:none;font-size:13px;'
+            . ($active ? 'background:#0073aa;color:#fff;font-weight:bold;' : 'background:#f0f0f0;color:#555;border:1px solid #ddd;')
+            . '">' . $label . '</a>';
+    };
+
+    // 日付ボタン
+    $wd = ['日', '月', '火', '水', '木', '金', '土'];
+    echo '<div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;">';
+    foreach ($dates as $d) {
+        $ts    = strtotime($d->news_date);
+        $label = date('m/d', $ts) . '(' . $wd[(int)date('w', $ts)] . ') ' . intval($d->c);
+        echo $btn(esc_html($label), add_query_arg(['tdate' => $d->news_date, 'tcat' => $tcat], $base), $tq === '' && $d->news_date === $tdate);
+    }
+    echo '</div>';
+
+    // 種別ボタン（選択日の件数付き）
+    $counts = array_fill_keys(array_keys($cat_labels), 0);
+    $cnt_rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT {$grp_sql} AS g, COUNT(*) AS c FROM {$table} WHERE news_date = %s GROUP BY g",
+        $tdate
+    ));
+    foreach ($cnt_rows as $cr) {
+        if (isset($counts[$cr->g])) $counts[$cr->g] = intval($cr->c);
+        $counts['all'] += intval($cr->c);
+    }
+    echo '<div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">';
+    foreach ($cat_labels as $k => $l) {
+        echo $btn(esc_html($l . ' (' . $counts[$k] . ')'), add_query_arg(['tdate' => $tdate, 'tcat' => $k], $base), $tcat === $k);
+    }
+    echo '</div>';
+
+    // 検索フォーム（キーワード指定時は保存期間内の全日付が対象）
+    echo '<form method="get" style="margin:0 0 14px 0;display:flex;gap:6px;align-items:center;">';
+    echo '<input type="hidden" name="page" value="wp-stocks-market"><input type="hidden" name="mtab" value="tcnews">';
+    echo '<input type="hidden" name="tcat" value="' . esc_attr($tcat) . '">';
+    echo '<input type="search" name="tq" value="' . esc_attr($tq) . '" placeholder="キーワード（保存期間内の見出し・本文）" style="width:300px;">';
+    echo '<button type="submit" class="button">検索</button>';
+    if ($tq !== '') echo '<a href="' . esc_url(add_query_arg(['tdate' => $tdate, 'tcat' => $tcat], $base)) . '">クリア</a>';
+    echo '</form>';
+
+    // 抽出
+    $where = [];
+    $args  = [];
+    if ($tq !== '') {
+        $like    = '%' . $wpdb->esc_like($tq) . '%';
+        $where[] = '(headline LIKE %s OR body LIKE %s)';
+        $args[]  = $like;
+        $args[]  = $like;
+    } else {
+        $where[] = 'news_date = %s';
+        $args[]  = $tdate;
+    }
+    if ($tcat !== 'all') {
+        $where[] = "({$grp_sql}) = %s";
+        $args[]  = $tcat;
+    }
+    $where_sql = implode(' AND ', $where);
+    $total = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table} WHERE {$where_sql}", $args));
+    $rows  = $wpdb->get_results($wpdb->prepare(
+        "SELECT id, news_date, news_at, category, issues, headline, body FROM {$table} WHERE {$where_sql} ORDER BY news_at DESC, id DESC LIMIT %d OFFSET %d",
+        array_merge($args, [$per, ($tp - 1) * $per])
+    ));
+
+    // 銘柄コード → 登録済み銘柄（日本株は .T 付きで登録されている想定）
+    $parse = function ($issues) {
+        $out = [];
+        foreach (explode('|', (string)$issues) as $c) {
+            $c = trim($c);
+            if ($c !== '') $out[] = (string)$c;
+        }
+        return $out;
+    };
+    $all_codes = [];
+    foreach ($rows as $r) {
+        foreach ($parse($r->issues) as $c) $all_codes[$c] = true;
+    }
+    $stock_map = [];
+    if (!empty($all_codes)) {
+        $cand = [];
+        foreach (array_keys($all_codes) as $c) {
+            $cand[] = (string)$c;
+            $cand[] = $c . '.T';
+        }
+        $ph = implode(',', array_fill(0, count($cand), '%s'));
+        $found = $wpdb->get_results($wpdb->prepare("SELECT id, code, name FROM {$wpdb->prefix}stocks WHERE code IN ({$ph})", $cand));
+        foreach ($found as $s) {
+            $stock_map[(string)preg_replace('/\.T$/', '', $s->code)] = $s;
+        }
+    }
+
+    echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;">';
+    echo '<h3 style="margin:0 0 10px 0;font-size:14px;">'
+        . ($tq !== '' ? '検索結果「' . esc_html($tq) . '」' : esc_html(date('Y/m/d', strtotime($tdate))))
+        . ' &#8212; ' . intval($total) . '件</h3>';
+    if (empty($rows)) {
+        echo '<p style="color:#888;">該当するニュースはありません。</p>';
+    }
+    foreach ($rows as $r) {
+        $ts       = strtotime($r->news_at);
+        $time     = ($tq !== '') ? date('m/d H:i', $ts) : date('H:i', $ts);
+        $headline = (string)$r->headline;
+        $codes    = $parse($r->issues);
+        $n_codes  = count($codes);
+
+        echo '<details style="border-bottom:1px solid #f0f0f0;padding:6px 0;">';
+        echo '<summary style="cursor:pointer;font-size:13px;">';
+        echo '<span style="color:#888;margin-right:8px;">' . esc_html($time) . '</span>' . esc_html($headline);
+        if ($n_codes > 0) {
+            $short = implode(',', array_slice($codes, 0, 5)) . ($n_codes > 5 ? ' 他' . ($n_codes - 5) . '件' : '');
+            echo ' <span style="color:#999;font-size:11px;">[' . esc_html($short) . ']</span>';
+        }
+        echo '</summary>';
+        echo '<div style="padding:8px 0 4px 0;font-size:13px;line-height:1.7;color:#333;">';
+
+        // 登録済み銘柄はリンク、未登録はまとめて1行
+        if ($n_codes > 0) {
+            $unreg = [];
+            echo '<div style="margin-bottom:8px;line-height:2;">';
+            foreach ($codes as $c) {
+                if (isset($stock_map[$c])) {
+                    $s = $stock_map[$c];
+                    echo '<a href="' . esc_url(admin_url('admin.php?page=wp-stocks-company&stock_id=' . intval($s->id)))
+                        . '" style="display:inline-block;margin:0 6px 2px 0;padding:0 8px;background:#eef6fb;border-radius:10px;font-size:12px;text-decoration:none;">'
+                        . esc_html($c . ' ' . $s->name) . '</a>';
+                } else {
+                    $unreg[] = $c;
+                }
+            }
+            if (!empty($unreg)) {
+                echo '<div style="color:#999;font-size:11px;line-height:1.6;">未登録: ' . esc_html(implode(', ', $unreg)) . '</div>';
+            }
+            echo '</div>';
+        }
+
+        // 本文（先頭に見出しが重複していれば除去。決算は表が崩れないよう等幅・折り返しなし）
+        $body = (string)$r->body;
+        if ($headline !== '' && strpos($body, $headline) === 0) {
+            $body = ltrim(substr($body, strlen($headline)), "\r\n");
+        }
+        if ($body === '') {
+            echo '<span style="color:#aaa;">（本文なし）</span>';
+        } elseif (strpos($headline, '<決算>') === 0) {
+            echo '<pre style="margin:0;overflow-x:auto;white-space:pre;font-family:monospace;font-size:12px;line-height:1.5;background:#fafafa;padding:8px;border:1px solid #eee;">'
+                . esc_html($body) . '</pre>';
+        } else {
+            echo nl2br(esc_html($body));
+        }
+        echo '</div></details>';
+    }
+
+    // ページ送り
+    $pages = (int)ceil($total / $per);
+    if ($pages > 1) {
+        echo '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;">';
+        $q = ['tdate' => $tdate, 'tcat' => $tcat, 'tq' => $tq];
+        if ($tp > 1) echo '<a class="button" href="' . esc_url(add_query_arg($q + ['tp' => $tp - 1], $base)) . '">&laquo; 前へ</a>';
+        echo '<span style="font-size:12px;color:#666;">' . intval($tp) . ' / ' . intval($pages) . '</span>';
+        if ($tp < $pages) echo '<a class="button" href="' . esc_url(add_query_arg($q + ['tp' => $tp + 1], $base)) . '">次へ &raquo;</a>';
+        echo '</div>';
+    }
+    echo '</div>';
+}
+
 function wp_stocks_market_info_page() {
     $active_tab = sanitize_text_field($_GET['mtab'] ?? 'news');
-    if (!in_array($active_tab, ['news', 'index', 'heatmap', 'disclosure'], true)) $active_tab = 'news';
+    if (!in_array($active_tab, ['news', 'tcnews', 'index', 'heatmap', 'disclosure'], true)) $active_tab = 'news';
 
     echo '<div class="wrap"><h1>&#x1F30D; マーケット情報</h1>';
 
     $tab_defs = [
         'news'       => '&#x1F4F0; ニュース',
+        'tcnews'     => '&#x1F4E1; 立花ニュース',
         'index'      => '&#x1F4CA; 指数',
         'heatmap'    => '&#x1F321; ヒートマップ',
         'disclosure' => '&#x1F4CB; 適時開示',
@@ -164,6 +371,8 @@ function wp_stocks_market_info_page() {
         wp_stocks_render_market_indices();
     } elseif ($active_tab === 'heatmap') {
         wp_stocks_sector_page(true, admin_url('admin.php?page=wp-stocks-market&mtab=heatmap'));
+    } elseif ($active_tab === 'tcnews') {
+        wp_stocks_render_tachibana_news_tab();
     } elseif ($active_tab === 'disclosure') {
         wp_stocks_render_recent_news_widget(30);
     }
