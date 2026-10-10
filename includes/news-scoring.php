@@ -27,18 +27,18 @@ const WP_STOCKS_NWS_PAGE = 'wp-stocks-news-score';
 function wp_stocks_nws_point_defs() {
     return [
         'earnings_score'  => ['決算スコア（÷分母で換算・TDnet）', 0], // 換算は別設定。表示用
-        'rev_up'          => ['上方修正（修正幅15%以上／幅不明）', 3],
-        'rev_up_small'    => ['上方修正（修正幅15%未満）', 2],
-        'rev_down'        => ['下方修正（修正幅15%以上／幅不明）', -3],
-        'rev_down_small'  => ['下方修正（修正幅15%未満）', -2],
-        'turn_black'      => ['営業利益 黒字転換', 2],
-        'turn_red'        => ['営業利益 赤字転落', -2],
+        'rev_up'          => ['上方修正（修正幅15%以上／幅不明）', 4],
+        'rev_up_small'    => ['上方修正（修正幅15%未満）', 3],
+        'rev_down'        => ['下方修正（修正幅15%以上／幅不明）', -4],
+        'rev_down_small'  => ['下方修正（修正幅15%未満）', -3],
+        'turn_black'      => ['営業利益 黒字転換', 3],
+        'turn_red'        => ['営業利益 赤字転落', -3],
         'red_shrink'      => ['営業損失 赤字縮小', 1],
-        'red_expand'      => ['営業損失 赤字拡大', -1],
-        'op_up_big'       => ['営業利益 +50%以上', 2],
-        'op_up'           => ['営業利益 +20〜50%', 1],
-        'op_down_big'     => ['営業利益 −50%以上', -2],
-        'op_down'         => ['営業利益 −20〜50%', -1],
+        'red_expand'      => ['営業損失 赤字拡大', -2],
+        'op_up_big'       => ['営業利益 +50%以上', 3],
+        'op_up'           => ['営業利益 +20〜50%', 2],
+        'op_down_big'     => ['営業利益 −50%以上', -3],
+        'op_down'         => ['営業利益 −20〜50%', -2],
         'div_up'          => ['増配・配当予想の増額', 2],
         'div_down'        => ['減配・無配・配当予想の減額', -2],
         'div_revival'     => ['復配', 2],
@@ -436,7 +436,19 @@ function wp_stocks_nws_bdays_since($date_ymd, $today_ymd = null) {
 }
 
 // 0〜3営業日 100% / 4〜7日 70% / 8〜14日 40% / 15日以降 0%
-function wp_stocks_nws_decay($bdays) {
+// 発表直後に効くもの（決算・修正・配当）は短く: 0〜3営業日100%→4日75%→5日50%→6日25%→7日以降0
+function wp_stocks_nws_is_short_type($type) {
+    return (bool)preg_match('/^(earnings_score|rev_|turn_|red_|op_|div_)/', (string)$type);
+}
+
+function wp_stocks_nws_decay($bdays, $type = '') {
+    if (wp_stocks_nws_is_short_type($type)) {
+        if ($bdays <= 3) return 1.0;
+        if ($bdays == 4) return 0.75;
+        if ($bdays == 5) return 0.5;
+        if ($bdays == 6) return 0.25;
+        return 0.0;
+    }
     if ($bdays <= 3) return 1.0;
     if ($bdays <= 7) return 0.7;
     if ($bdays <= 14) return 0.4;
@@ -445,13 +457,13 @@ function wp_stocks_nws_decay($bdays) {
 
 // $rows: eventsの行（配列/オブジェクト）。戻り値: ['total'=>, 'items'=>[... + weight, eff, counted]]
 function wp_stocks_nws_score_rows(array $rows, $today_ymd = null) {
-    $cap = (float)wp_stocks_nws_setting('total_cap', 5);
+    $cap = (float)wp_stocks_nws_setting('total_cap', 6);
     $items = [];
     $best = []; // group => index of items
     foreach ($rows as $r) {
         $r = (array)$r;
         $bd = wp_stocks_nws_bdays_since($r['event_date'], $today_ymd);
-        $w = wp_stocks_nws_decay($bd);
+        $w = wp_stocks_nws_decay($bd, $r['event_type'] ?? '');
         $eff = (float)$r['points'] * $w;
         $r['bdays'] = $bd;
         $r['weight'] = $w;
@@ -613,7 +625,7 @@ function wp_stocks_nws_handle_action() {
             'sources'   => $src,
             'score_div' => max(0.5, (float)($_POST['score_div'] ?? 2)),
             'score_cap' => max(0.5, (float)($_POST['score_cap'] ?? 3)),
-            'total_cap' => max(1, (float)($_POST['total_cap'] ?? 5)),
+            'total_cap' => max(1, (float)($_POST['total_cap'] ?? 6)),
         ], false);
         update_option('wp_stocks_nws_custom_rules', sanitize_textarea_field(wp_unslash($_POST['custom_rules'] ?? '')), false);
         update_option('wp_stocks_nws_auto_box', !empty($_POST['auto_box']) ? 1 : 0, false);
@@ -644,8 +656,85 @@ function wp_stocks_nws_handle_action() {
         if ($id > 0) $wpdb->query($wpdb->prepare("DELETE FROM {$ev_t} WHERE id = %d AND source = 'manual'", $id));
         $msg = 'manual_deleted';
     }
-    wp_safe_redirect(wp_stocks_nws_tab_url(['msg' => $msg]));
+    $ref = wp_get_referer();
+    if ($ref && strpos($ref, 'page=wp-stocks-market') !== false) {
+        wp_safe_redirect(add_query_arg('nwsmsg', $msg, remove_query_arg(['nwsmsg'], $ref)));
+    } else {
+        wp_safe_redirect(wp_stocks_nws_tab_url(['msg' => $msg]));
+    }
     exit;
+}
+
+// 登録銘柄のニューススコア一覧（設定タブと、マーケット情報の立花ニュース最上部で共用）
+function wp_stocks_nws_render_ranking($show_all = false, $compact = false) {
+    global $wpdb;
+    wp_stocks_nws_ensure_table();
+    wp_stocks_nws_maybe_classify();
+    $scores = wp_stocks_nws_scores_all();
+    $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE status IN ('watch','portfolio')");
+    $list = [];
+    foreach ((array)$stocks as $s) {
+        $code = wp_stocks_nws_normalize_symbol($s->code ?? ($s->symbol ?? ''));
+        if (!wp_stocks_nws_is_jp_code($code)) continue;
+        $sc = $scores[$code] ?? ['total' => 0.0, 'items' => []];
+        if (!$show_all && abs($sc['total']) < 0.05 && !array_filter($sc['items'], function ($i) { return $i['counted']; })) continue;
+        $list[] = ['code' => $code, 'name' => (string)($s->name ?? ''), 'status' => (string)($s->status ?? ''), 'sc' => $sc];
+    }
+    usort($list, function ($a, $b) { return $b['sc']['total'] <=> $a['sc']['total']; });
+
+    echo $compact ? '<h3 style="margin:0 0 6px;">&#x1F4F0; ニュース加減点のある登録銘柄</h3>' : '<h2 style="margin-top:20px;">登録銘柄のニューススコア</h2>';
+    echo '<p class="description">直近30日のニュースを、営業日の経過で減衰（決算・修正・配当は0〜3日100%→7日で0、その他は0〜3日100%／4〜7日70%／8〜14日40%／15日以降0）させて合計。保有・ウォッチの日本株が対象です。 ';
+    if ($compact) {
+        echo '<a href="' . esc_url(wp_stocks_nws_tab_url()) . '">一覧・設定</a>';
+    } else {
+        echo $show_all
+            ? '<a href="' . esc_url(wp_stocks_nws_tab_url()) . '">加減点のある銘柄だけ表示</a>'
+            : '<a href="' . esc_url(wp_stocks_nws_tab_url(['all' => 1])) . '">全銘柄を表示</a>';
+    }
+    echo '</p>';
+    if (!$list) {
+        echo '<p>加減点のある登録銘柄はありません。</p>';
+    } else {
+        echo '<table class="widefat striped" style="max-width:1100px;"><thead><tr><th style="width:70px;">コード</th><th style="width:200px;">銘柄</th><th style="width:80px;">区分</th><th style="width:80px;">スコア</th><th>主な理由</th></tr></thead><tbody>';
+        foreach ($list as $row) {
+            $reasons = [];
+            foreach ($row['sc']['items'] as $it) {
+                if (!$it['counted']) continue;
+                $reasons[] = $it['reason'] . '(' . ($it['points'] > 0 ? '+' : '') . rtrim(rtrim(number_format((float)$it['points'], 1), '0'), '.') . '×' . round($it['weight'] * 100) . '%)';
+            }
+            echo '<tr><td>' . esc_html($row['code']) . '</td><td>' . esc_html($row['name']) . '</td><td>' . esc_html($row['status'] === 'portfolio' ? '保有' : 'ウォッチ') . '</td>'
+               . '<td>' . wp_stocks_nws_badge($row['sc']['total']) . '</td><td>' . esc_html(implode(' / ', array_slice($reasons, 0, 5))) . '</td></tr>';
+        }
+        echo '</tbody></table>';
+    }
+}
+
+// 手動の加減点の登録フォームと登録済み一覧（設定タブと、立花ニュース最上部で共用）
+function wp_stocks_nws_render_manual($compact = false) {
+    global $wpdb;
+    $action_url = esc_url(admin_url('admin-post.php'));
+    $ev_t = wp_stocks_nws_events_table();
+    echo $compact ? '<h3 style="margin:14px 0 6px;">手動で加減点を登録</h3>' : '<h2 style="margin-top:30px;">手動で加減点を登録</h2>';
+    echo '<form method="post" action="' . $action_url . '" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
+    wp_nonce_field('wp_stocks_nws_action');
+    echo '<input type="hidden" name="action" value="wp_stocks_nws_action"><input type="hidden" name="op" value="add_manual">';
+    echo '銘柄コード <input type="text" name="code" style="width:80px;" placeholder="7203" required> ';
+    echo '日付 <input type="date" name="date" value="' . esc_attr(wp_stocks_nws_now() ? substr(wp_stocks_nws_now(), 0, 10) : '') . '" required> ';
+    echo '点数 <input type="number" name="points" step="0.5" min="-10" max="10" style="width:70px;" required> ';
+    echo 'メモ <input type="text" name="memo" style="width:320px;" placeholder="例: 新工場の稼働開始報道"> ';
+    echo '<button type="submit" class="button button-primary">登録</button></form>';
+    echo '<p class="description">手動分も同じ減衰で効き、同種の重複排除は行わず全件加算します。</p>';
+
+    $manual = $wpdb->get_results("SELECT * FROM {$ev_t} WHERE source = 'manual' ORDER BY event_date DESC, id DESC LIMIT 30");
+    if ($manual) {
+        echo '<table class="widefat striped" style="max-width:900px;margin-top:8px;"><thead><tr><th>日付</th><th>コード</th><th>点数</th><th>メモ</th><th></th></tr></thead><tbody>';
+        foreach ($manual as $m) {
+            $del = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_nws_action&op=delete_manual&id=' . (int)$m->id), 'wp_stocks_nws_action');
+            echo '<tr><td>' . esc_html($m->event_date) . '</td><td>' . esc_html($m->code) . '</td><td>' . esc_html($m->points) . '</td><td>' . esc_html($m->headline) . '</td>'
+               . '<td><a href="' . esc_url($del) . '" onclick="return confirm(\'削除しますか？\');">削除</a></td></tr>';
+        }
+        echo '</tbody></table>';
+    }
 }
 
 function wp_stocks_nws_page($embedded = false) {
@@ -678,62 +767,10 @@ function wp_stocks_nws_page($embedded = false) {
     }
 
     // ---- ランキング ----
-    $scores = wp_stocks_nws_scores_all();
-    $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE status IN ('watch','portfolio')");
-    $list = [];
-    foreach ((array)$stocks as $s) {
-        $code = wp_stocks_nws_normalize_symbol($s->code ?? ($s->symbol ?? ''));
-        if (!wp_stocks_nws_is_jp_code($code)) continue;
-        $sc = $scores[$code] ?? ['total' => 0.0, 'items' => []];
-        if (!$show_all && abs($sc['total']) < 0.05 && !array_filter($sc['items'], function ($i) { return $i['counted']; })) continue;
-        $list[] = ['code' => $code, 'name' => (string)($s->name ?? ''), 'status' => (string)($s->status ?? ''), 'sc' => $sc];
-    }
-    usort($list, function ($a, $b) { return $b['sc']['total'] <=> $a['sc']['total']; });
-
-    echo '<h2 style="margin-top:20px;">登録銘柄のニューススコア</h2>';
-    echo '<p class="description">直近30日のニュースを、営業日の経過で減衰（0〜3日100%／4〜7日70%／8〜14日40%／15日以降0）させて合計。保有・ウォッチの日本株が対象です。 ';
-    echo $show_all
-        ? '<a href="' . esc_url(wp_stocks_nws_tab_url()) . '">加減点のある銘柄だけ表示</a>'
-        : '<a href="' . esc_url(wp_stocks_nws_tab_url(['all' => 1])) . '">全銘柄を表示</a>';
-    echo '</p>';
-    if (!$list) {
-        echo '<p>加減点のある登録銘柄はありません。</p>';
-    } else {
-        echo '<table class="widefat striped" style="max-width:1100px;"><thead><tr><th style="width:70px;">コード</th><th style="width:200px;">銘柄</th><th style="width:80px;">区分</th><th style="width:80px;">スコア</th><th>主な理由</th></tr></thead><tbody>';
-        foreach ($list as $row) {
-            $reasons = [];
-            foreach ($row['sc']['items'] as $it) {
-                if (!$it['counted']) continue;
-                $reasons[] = $it['reason'] . '(' . ($it['points'] > 0 ? '+' : '') . rtrim(rtrim(number_format((float)$it['points'], 1), '0'), '.') . '×' . round($it['weight'] * 100) . '%)';
-            }
-            echo '<tr><td>' . esc_html($row['code']) . '</td><td>' . esc_html($row['name']) . '</td><td>' . esc_html($row['status'] === 'portfolio' ? '保有' : 'ウォッチ') . '</td>'
-               . '<td>' . wp_stocks_nws_badge($row['sc']['total']) . '</td><td>' . esc_html(implode(' / ', array_slice($reasons, 0, 5))) . '</td></tr>';
-        }
-        echo '</tbody></table>';
-    }
+    wp_stocks_nws_render_ranking($show_all, false);
 
     // ---- 手動登録 ----
-    echo '<h2 style="margin-top:30px;">手動で加減点を登録</h2>';
-    echo '<form method="post" action="' . $action_url . '" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
-    wp_nonce_field('wp_stocks_nws_action');
-    echo '<input type="hidden" name="action" value="wp_stocks_nws_action"><input type="hidden" name="op" value="add_manual">';
-    echo '銘柄コード <input type="text" name="code" style="width:80px;" placeholder="7203" required> ';
-    echo '日付 <input type="date" name="date" value="' . esc_attr(wp_stocks_nws_now() ? substr(wp_stocks_nws_now(), 0, 10) : '') . '" required> ';
-    echo '点数 <input type="number" name="points" step="0.5" min="-10" max="10" style="width:70px;" required> ';
-    echo 'メモ <input type="text" name="memo" style="width:320px;" placeholder="例: 新工場の稼働開始報道"> ';
-    echo '<button type="submit" class="button button-primary">登録</button></form>';
-    echo '<p class="description">手動分も同じ減衰で効き、同種の重複排除は行わず全件加算します。</p>';
-
-    $manual = $wpdb->get_results("SELECT * FROM {$ev_t} WHERE source = 'manual' ORDER BY event_date DESC, id DESC LIMIT 30");
-    if ($manual) {
-        echo '<table class="widefat striped" style="max-width:900px;margin-top:8px;"><thead><tr><th>日付</th><th>コード</th><th>点数</th><th>メモ</th><th></th></tr></thead><tbody>';
-        foreach ($manual as $m) {
-            $del = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_nws_action&op=delete_manual&id=' . (int)$m->id), 'wp_stocks_nws_action');
-            echo '<tr><td>' . esc_html($m->event_date) . '</td><td>' . esc_html($m->code) . '</td><td>' . esc_html($m->points) . '</td><td>' . esc_html($m->headline) . '</td>'
-               . '<td><a href="' . esc_url($del) . '" onclick="return confirm(\'削除しますか？\');">削除</a></td></tr>';
-        }
-        echo '</tbody></table>';
-    }
+    wp_stocks_nws_render_manual(false);
 
     // ---- 設定 ----
     $P = wp_stocks_nws_points();
@@ -751,7 +788,7 @@ function wp_stocks_nws_page($embedded = false) {
     echo '<p class="description">TDnetをオフにすると、決算スコア・自社株買い・TOB・提携・特別損益・不祥事などは判定されません（&lt;決算&gt;の修正・増減益は残ります）。変更後は「再判定」を押してください。</p></td></tr>';
 
     echo '<tr><th>決算スコアの換算</th><td>点数 = 決算スコア ÷ <input type="number" name="score_div" step="0.5" min="0.5" value="' . esc_attr(wp_stocks_nws_setting('score_div', 2)) . '" style="width:60px;"> を0.5刻みで丸め、±<input type="number" name="score_cap" step="0.5" min="0.5" value="' . esc_attr(wp_stocks_nws_setting('score_cap', 3)) . '" style="width:60px;"> で頭打ち（TDnetがオンのときのみ）</td></tr>';
-    echo '<tr><th>合計の上限</th><td>±<input type="number" name="total_cap" step="0.5" min="1" value="' . esc_attr(wp_stocks_nws_setting('total_cap', 5)) . '" style="width:60px;"> 点で頭打ち</td></tr>';
+    echo '<tr><th>合計の上限</th><td>±<input type="number" name="total_cap" step="0.5" min="1" value="' . esc_attr(wp_stocks_nws_setting('total_cap', 6)) . '" style="width:60px;"> 点で頭打ち</td></tr>';
 
     echo '<tr><th>点数表</th><td><table class="widefat striped" style="max-width:640px;"><tbody>';
     foreach (wp_stocks_nws_point_defs() as $k => $d) {

@@ -152,6 +152,17 @@ function wp_stocks_render_tachibana_news_tab() {
             . '">' . $label . '</a>';
     };
 
+    // 加減点のある登録銘柄（ニュース加減点機能がある場合のみ）
+    if (function_exists('wp_stocks_nws_render_ranking')) {
+        echo '<div style="background:#fff;border:1px solid #ddd;border-left:4px solid #0073aa;border-radius:6px;padding:12px 16px;margin-bottom:14px;">';
+        wp_stocks_nws_render_ranking(false, true);
+        $nm = sanitize_text_field(wp_unslash($_GET['nwsmsg'] ?? ''));
+        $nm_text = ['manual_added' => '手動の加減点を登録しました。', 'manual_invalid' => '入力が不正です（銘柄コード4桁・日付・0以外の点数が必要）。', 'manual_deleted' => '手動の加減点を削除しました。'][$nm] ?? '';
+        if ($nm_text !== '') echo '<div class="notice notice-info inline"><p>' . esc_html($nm_text) . '</p></div>';
+        if (function_exists('wp_stocks_nws_render_manual')) wp_stocks_nws_render_manual(true);
+        echo '</div>';
+    }
+
     // 登録銘柄だけに絞るトグル（状態はURLのtregで保持）
     $reg_url = add_query_arg(['tdate' => $tdate, 'tcat' => $tcat, 'tq' => $tq, 'treg' => $treg ? 0 : 1], $base);
     echo '<div style="margin-bottom:10px;">';
