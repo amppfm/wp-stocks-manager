@@ -16,7 +16,7 @@ if (!get_option('wp_stocks_temp_opcache_reset_done')) {
     update_option('wp_stocks_temp_opcache_reset_done', 1);
 }
 
-define('WP_STOCKS_VERSION', '5.4');
+define('WP_STOCKS_VERSION', '5.5');
 define('WP_STOCKS_LOG_DAYS', 30);
 
 // --------------------------------------------------
@@ -29,6 +29,7 @@ require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/edgar.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/fmp.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/jpx.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/tachibana.php';
+require_once plugin_dir_path(__FILE__) . 'includes/news-scoring.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/yahoo-scraping.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/index-quotes.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/technicals.php';
