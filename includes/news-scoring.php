@@ -339,6 +339,88 @@ function wp_stocks_nws_ensure_table() {
     return true;
 }
 
+// ============================================================
+// ニュース履歴（登録銘柄のニュースを、元の保存期間が過ぎても残す）
+// ============================================================
+
+function wp_stocks_nws_history_table() {
+    global $wpdb;
+    return $wpdb->prefix . 'stock_news_history';
+}
+
+function wp_stocks_nws_history_ensure_table() {
+    global $wpdb;
+    $ver = '1';
+    if (get_option('wp_stocks_nws_hist_db_version') === $ver) return true;
+    $table = wp_stocks_nws_history_table();
+    $charset = $wpdb->get_charset_collate();
+    $wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  news_id VARCHAR(64) NOT NULL DEFAULT '',
+  code VARCHAR(12) NOT NULL,
+  news_at DATETIME NOT NULL,
+  headline VARCHAR(500) NOT NULL DEFAULT '',
+  body MEDIUMTEXT NULL,
+  created_at DATETIME NOT NULL,
+  PRIMARY KEY  (id),
+  UNIQUE KEY uq_news_code (news_id, code),
+  KEY idx_code_at (code, news_at)
+) {$charset};");
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) !== $table) return false;
+    update_option('wp_stocks_nws_hist_db_version', $ver);
+    return true;
+}
+
+// ニュース1件が対象にしている銘柄コード（見出しの(コード)、なければissuesが3件以下のとき）
+function wp_stocks_nws_news_codes($headline, $issues) {
+    $h = mb_convert_kana((string)$headline, 'as', 'UTF-8');
+    if (preg_match('/\(([0-9]{3}[0-9A-Z])\)/', $h, $m)) return [strtoupper($m[1])];
+    $codes = [];
+    foreach (explode('|', (string)$issues) as $c) {
+        $c = strtoupper(trim($c));
+        if ($c !== '') $codes[] = $c;
+    }
+    return count($codes) > 3 ? [] : $codes;
+}
+
+// 登録銘柄（日本株）のニュースを履歴テーブルへ。$full=trueは保存済みの全ニュースが対象
+function wp_stocks_nws_archive_news($full = false) {
+    global $wpdb;
+    if (!wp_stocks_nws_history_ensure_table()) return 0;
+    $news_t = $wpdb->prefix . 'stock_tachibana_news';
+    $hist_t = wp_stocks_nws_history_table();
+
+    $reg = [];
+    foreach ((array)$wpdb->get_col("SELECT code FROM {$wpdb->prefix}stocks") as $c) {
+        $c = wp_stocks_nws_normalize_symbol($c);
+        if (wp_stocks_nws_is_jp_code($c)) $reg[$c] = true;
+    }
+    if (!$reg) return 0;
+
+    $started = wp_stocks_nws_now();
+    $last = $full ? '' : (string)get_option('wp_stocks_nws_last_archive', '');
+    if ($last !== '') {
+        $since = (new DateTime($last, new DateTimeZone('Asia/Tokyo')))->modify('-1 hour')->format('Y-m-d H:i:s');
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT news_id, news_at, issues, headline, body FROM {$news_t} WHERE fetched_at >= %s ORDER BY news_at ASC", $since));
+    } else {
+        $rows = $wpdb->get_results("SELECT news_id, news_at, issues, headline, body FROM {$news_t} ORDER BY news_at ASC");
+    }
+    $n = 0;
+    $now = wp_stocks_nws_now();
+    foreach ((array)$rows as $r) {
+        foreach (wp_stocks_nws_news_codes($r->headline, $r->issues) as $c) {
+            if (!isset($reg[$c])) continue;
+            $ok = $wpdb->query($wpdb->prepare(
+                "INSERT IGNORE INTO {$hist_t} (news_id, code, news_at, headline, body, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
+                $r->news_id, $c, $r->news_at, mb_substr((string)$r->headline, 0, 480), (string)$r->body, $now
+            ));
+            if ($ok) $n++;
+        }
+    }
+    update_option('wp_stocks_nws_last_archive', $started, false);
+    return $n;
+}
+
 function wp_stocks_nws_now() {
     return (new DateTime('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d H:i:s');
 }
@@ -390,6 +472,7 @@ function wp_stocks_nws_classify_recent($full = false) {
             if ($ok !== false) $res['events']++;
         }
     }
+    wp_stocks_nws_archive_news($full);
     update_option('wp_stocks_nws_last_scan', $started, false);
     update_option('wp_stocks_nws_last_run_ts', time(), false);
     return $res;
@@ -523,6 +606,36 @@ function wp_stocks_nws_badge($total) {
         . esc_html(($total > 0 ? '+' : '') . number_format($total, 1)) . '</span>';
 }
 
+// 銘柄ページ用: ニュース履歴（折りたたみ。加減点が付いたニュースは点数を表示）
+function wp_stocks_nws_render_history($code) {
+    global $wpdb;
+    if (!wp_stocks_nws_history_ensure_table()) return;
+    $hist_t = wp_stocks_nws_history_table();
+    $total = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$hist_t} WHERE code = %s", $code));
+    echo '<details style="margin-top:10px;"><summary style="cursor:pointer;font-weight:bold;">&#x1F4DA; ニュース履歴（' . intval($total) . '件）</summary>';
+    if ($total === 0) {
+        echo '<p class="description" style="margin:6px 0 0;">まだ履歴がありません（取得したニュースから順次たまります）。</p></details>';
+        return;
+    }
+    $rows = $wpdb->get_results($wpdb->prepare("SELECT news_id, news_at, headline, body FROM {$hist_t} WHERE code = %s ORDER BY news_at DESC LIMIT 100", $code));
+    $pts = [];
+    foreach ((array)$wpdb->get_results($wpdb->prepare("SELECT news_id, points FROM " . wp_stocks_nws_events_table() . " WHERE code = %s AND source = 'auto'", $code)) as $e) {
+        $pts[$e->news_id] = ($pts[$e->news_id] ?? 0) + (float)$e->points;
+    }
+    echo '<div style="max-height:420px;overflow-y:auto;margin-top:6px;">';
+    foreach ($rows as $r) {
+        $badge = isset($pts[$r->news_id]) ? ' ' . wp_stocks_nws_badge($pts[$r->news_id]) : '';
+        $body = (string)$r->body;
+        if ($r->headline !== '' && strpos($body, $r->headline) === 0) $body = ltrim(substr($body, strlen($r->headline)), "\r\n");
+        echo '<details style="border-bottom:1px solid #f0f0f0;padding:4px 0;"><summary style="cursor:pointer;font-size:12px;">'
+            . '<span style="color:#888;margin-right:8px;">' . esc_html(substr($r->news_at, 0, 16)) . '</span>' . esc_html($r->headline) . $badge . '</summary>'
+            . '<div style="padding:6px 0 2px;font-size:12px;line-height:1.7;">' . ($body !== '' ? nl2br(esc_html($body)) : '<span style="color:#aaa;">（本文なし）</span>') . '</div></details>';
+    }
+    echo '</div>';
+    if ($total > 100) echo '<p class="description" style="margin:4px 0 0;">新しい100件を表示しています（全' . intval($total) . '件）。</p>';
+    echo '</details>';
+}
+
 function wp_stocks_news_company_box($stock) {
     $symbol = is_object($stock) ? ($stock->code ?? ($stock->symbol ?? '')) : (string)$stock;
     $code = wp_stocks_nws_normalize_symbol($symbol);
@@ -550,6 +663,7 @@ function wp_stocks_news_company_box($stock) {
         echo '</tbody></table>';
     }
     echo '<p class="description" style="margin:8px 0 0;"><a href="' . esc_url(wp_stocks_nws_tab_url()) . '">ニュース加減点の一覧・設定</a></p>';
+    wp_stocks_nws_render_history($code);
     echo '</div>';
 }
 
