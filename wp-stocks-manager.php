@@ -442,6 +442,14 @@ function wp_stocks_get_company_info($symbol) {
         // 手動の当期予想EPSがあれば画面表示（forward_eps）にも反映
         if ($manual_feps !== null) $result['forward_eps'] = $manual_feps;
 
+        // Yahoo・J-Quants・手動のいずれにも予想EPSが無い場合だけ、決算短信（TDnet）の会社予想EPSで補う
+        if (empty($result['forward_eps']) || $result['forward_eps'] <= 0) {
+            $tde_stock_id = (int)$wpdb->get_var($wpdb->prepare("SELECT id FROM {$wpdb->prefix}stocks WHERE code = %s", $jquants_code));
+            if ($tde_stock_id && function_exists('wp_stocks_tde_forecast_eps') && ($tfe = wp_stocks_tde_forecast_eps($tde_stock_id))) {
+                $result['forward_eps'] = $tfe['eps'];
+            }
+        }
+
         // 予想EPS成長率(%) = (来期予想EPS - 当期予想EPS) / 当期予想EPS × 100
         if (!empty($feps) && !empty($nxfeps) && $feps > 0) {
             $growth_rate = ($nxfeps - $feps) / $feps * 100;

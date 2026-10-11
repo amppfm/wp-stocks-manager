@@ -93,6 +93,8 @@ function wp_stocks_tde_parse_table($body) {
         'cf_financing'     => $val('財務キャッシュフロー'),
         'cash_equivalents' => $val('現金、現金同等物残高'),
         'dividend_annual'  => $div_annual,
+        // 会社の通期予想EPS（四半期の表は3列目、本決算の表は2列目＝次期予想）
+        'fc_eps'           => $val('一株利益(円)', $quarter === 4 ? 1 : 2, false),
     ];
     $er = $val('自己資本比率', 0, false);
     if ($er !== null) $out['equity_ratio'] = $er / 100.0; // J-Quantsと同じ小数（0.598）
@@ -162,7 +164,7 @@ function wp_stocks_tde_results_table() {
 
 function wp_stocks_tde_ensure_table() {
     global $wpdb;
-    $ver = '2';
+    $ver = '3';
     if (get_option('wp_stocks_tde_db_version') === $ver) return true;
     $table = wp_stocks_tde_results_table();
     $charset = $wpdb->get_charset_collate();
@@ -182,11 +184,14 @@ function wp_stocks_tde_ensure_table() {
   fc_ni BIGINT DEFAULT NULL, fc_ni_yoy FLOAT DEFAULT NULL, fc_ni_vs_co FLOAT DEFAULT NULL, fc_ni_vs_cons FLOAT DEFAULT NULL,
   div_actual FLOAT DEFAULT NULL,
   div_forecast FLOAT DEFAULT NULL,
+  fc_eps FLOAT DEFAULT NULL,
   updated_at DATETIME NOT NULL,
   PRIMARY KEY  (id),
   UNIQUE KEY uq_stock_period (stock_id, fiscal_year, fiscal_quarter)
 ) {$charset};");
     if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table)) !== $table) return false;
+    // v3: 会社予想EPS列を追加（既存テーブルのみ）
+    if (!$wpdb->get_var("SHOW COLUMNS FROM {$table} LIKE 'fc_eps'")) $wpdb->query("ALTER TABLE {$table} ADD COLUMN fc_eps FLOAT DEFAULT NULL");
     // v1は本決算の会計年度が1年ずれていたため、作り直す（派生データなので「再判定」で復元される）
     if (get_option('wp_stocks_tde_db_version') === '1') $wpdb->query("DELETE FROM {$table}");
     update_option('wp_stocks_tde_db_version', $ver);
@@ -220,6 +225,13 @@ function wp_stocks_tde_save_table($stock_id, array $p) {
     $existing = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$t} WHERE stock_id = %d AND period_end = %s AND source = 'tdnet'", $stock_id, $p['period_end']));
     if ($existing) $wpdb->update($t, $data, ['id' => $existing]);
     else $wpdb->insert($t, $data);
+    if (isset($p['fc_eps']) && $p['fc_eps'] > 0 && wp_stocks_tde_ensure_table()) {
+        $rt = wp_stocks_tde_results_table();
+        $rid = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$rt} WHERE stock_id = %d AND fiscal_year = %d AND fiscal_quarter = %d", $stock_id, $p['fiscal_year'], $p['fiscal_quarter']));
+        if ($rid) $wpdb->update($rt, ['fc_eps' => $p['fc_eps']], ['id' => $rid]);
+        else $wpdb->insert($rt, ['stock_id' => $stock_id, 'fiscal_year' => $p['fiscal_year'], 'fiscal_quarter' => $p['fiscal_quarter'],
+            'period_end' => $p['period_end'], 'fc_eps' => $p['fc_eps'], 'updated_at' => wp_stocks_nws_now()]);
+    }
     return true;
 }
 
@@ -330,12 +342,24 @@ function wp_stocks_tde_fmt_pct($v) {
     return '<span style="color:' . $c . ';font-weight:bold;">' . ($v > 0 ? '+' : '') . number_format($v, 1) . '%</span>';
 }
 
+// 会社予想EPSと、QUICKコンセンサス比から逆算した概算コンセンサスEPS（最新の開示）。なければnull
+function wp_stocks_tde_forecast_eps($stock_id) {
+    global $wpdb;
+    if (!wp_stocks_tde_ensure_table()) return null;
+    $r = $wpdb->get_row($wpdb->prepare(
+        "SELECT fc_eps, fc_ni_vs_cons, fy_end FROM " . wp_stocks_tde_results_table() . " WHERE stock_id = %d AND fc_eps > 0 ORDER BY COALESCE(disclosed_at, period_end) DESC LIMIT 1", $stock_id));
+    if (!$r) return null;
+    $cons = null;
+    if ($r->fc_ni_vs_cons !== null && (float)$r->fc_ni_vs_cons > -90) $cons = (float)$r->fc_eps / (1 + (float)$r->fc_ni_vs_cons / 100);
+    return ['eps' => (float)$r->fc_eps, 'cons' => $cons, 'fy_end' => $r->fy_end];
+}
+
 // 財務タブ上部: 最新の決算短信（TDnet）の通期予想と比較
 function wp_stocks_tde_render_panel($stock_id) {
     global $wpdb;
     if (!wp_stocks_tde_ensure_table()) return;
     $r = $wpdb->get_row($wpdb->prepare(
-        "SELECT * FROM " . wp_stocks_tde_results_table() . " WHERE stock_id = %d ORDER BY COALESCE(disclosed_at, period_end) DESC LIMIT 1", $stock_id));
+        "SELECT * FROM " . wp_stocks_tde_results_table() . " WHERE stock_id = %d AND doc_title <> '' ORDER BY COALESCE(disclosed_at, period_end) DESC LIMIT 1", $stock_id));
     if (!$r) return;
     $labels = ['revenue' => '売上高', 'op' => '営業利益', 'ord' => '経常利益', 'ni' => '純利益'];
     echo '<div style="background:#fff;border:1px solid #ddd;border-left:4px solid #0073aa;border-radius:6px;padding:12px 16px;margin-bottom:18px;max-width:900px;">';
@@ -351,6 +375,11 @@ function wp_stocks_tde_render_panel($stock_id) {
             . '<td style="text-align:right;">' . wp_stocks_tde_fmt_pct($r->{"fc_{$k}_vs_cons"}) . '</td></tr>';
     }
     echo '</tbody></table>';
+    $fe = wp_stocks_tde_forecast_eps($stock_id);
+    if ($fe) {
+        echo '<p style="margin:8px 0 0;font-size:12px;">予想EPS: 会社予想 <strong>' . esc_html(number_format($fe['eps'], 2)) . '円</strong>'
+            . ($fe['cons'] !== null ? ' ／ 概算コンセンサス 約<strong>' . esc_html(number_format($fe['cons'], 2)) . '円</strong>（QUICKコンセンサス比の純利益から逆算）' : '') . '</p>';
+    }
     if ($r->div_actual !== null || $r->div_forecast !== null) {
         echo '<p style="margin:8px 0 0;font-size:12px;">配当（年間）: 実績 ' . ($r->div_actual !== null ? esc_html(number_format($r->div_actual, 2)) . '円' : '-')
             . ' ／ 予想 ' . ($r->div_forecast !== null ? esc_html(number_format($r->div_forecast, 2)) . '円' : '-') . '</p>';
