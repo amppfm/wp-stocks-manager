@@ -632,6 +632,7 @@ function wp_stocks_nws_classify_recent($full = false) {
         }
     }
     wp_stocks_nws_archive_news($full);
+    if (function_exists('wp_stocks_tde_ingest')) wp_stocks_tde_ingest($full); // 決算短信を財務データへ
     update_option('wp_stocks_nws_last_scan', $started, false);
     update_option('wp_stocks_nws_last_run_ts', time(), false);
     return $res;

@@ -1544,14 +1544,19 @@ function wp_stocks_company_page() {
         echo '<p style="margin-bottom:20px;"><a href="' . esc_url($jq_combined_url) . '" class="button">&#x1F504; J-Quantsから年間・四半期データをまとめて取得</a></p>';
     }
 
+    // 最新の決算短信（TDnet）の通期予想・会社予想比・QUICKコンセンサス比
+    if (!$is_usd && function_exists('wp_stocks_tde_render_panel')) wp_stocks_tde_render_panel((int)$id);
+
     echo '<h2 style="border-left:4px solid #0073aa;padding-left:10px;">年間</h2>';
 
     if (!$is_usd) {
     // ★2026-09-26変更：EDINET由来のstock_financialsから、J-Quantsのstock_quarterly_financials
     // （fiscal_quarter=4=「通期」レコード）に置き換え。上の統合ボタンで四半期と同時に更新される。
     $financials = $wpdb->get_results($wpdb->prepare(
-        "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source = 'jquants' AND fiscal_quarter = 4 ORDER BY fiscal_year ASC", $id
+        "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source IN ('jquants','tdnet') AND fiscal_quarter = 4 ORDER BY fiscal_year ASC", $id
     ));
+    // J-Quantsにまだ無い期だけ、決算短信（TDnet）の値で補う
+    if (function_exists('wp_stocks_tde_merge_rows')) $financials = wp_stocks_tde_merge_rows((array)$financials);
 
     if (empty($financials)) {
         echo '<div style="background:#f8f9fa;border:1px solid #ddd;border-radius:8px;padding:30px;text-align:center;color:#888;margin-bottom:20px;">';
@@ -1841,9 +1846,11 @@ function wp_stocks_company_page() {
         // ===== 日本株: J-Quants由来（累計比較＋進捗率ゲージ＋差引単四半期＋CF） =====
         echo '<div id="jpQtabJquants">';
         $jq_qf = $wpdb->get_results($wpdb->prepare(
-            "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source = 'jquants' AND fiscal_year IS NOT NULL AND fiscal_quarter IS NOT NULL ORDER BY fiscal_year ASC, fiscal_quarter ASC", $id
+            "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials WHERE stock_id = %d AND source IN ('jquants','tdnet') AND fiscal_year IS NOT NULL AND fiscal_quarter IS NOT NULL ORDER BY fiscal_year ASC, fiscal_quarter ASC", $id
         ));
-        echo '<p style="color:#888;font-size:12px;margin-bottom:15px;">J-Quants由来のデータです。各値は決算短信の慣行に従い「期首からの累計値」です（通常は週次Cronで自動取得されます。手動更新は上部「年間」セクションの統合ボタンから行えます）。</p>';
+        // J-Quantsにまだ無い期だけ、決算短信（TDnet）の値で補う
+        if (function_exists('wp_stocks_tde_merge_rows')) $jq_qf = wp_stocks_tde_merge_rows((array)$jq_qf);
+        echo '<p style="color:#888;font-size:12px;margin-bottom:15px;">J-Quants由来のデータです（J-Quantsにまだ無い直近の期は、立花ニュースの決算短信で補います）。各値は決算短信の慣行に従い「期首からの累計値」です（通常は週次Cronで自動取得されます。手動更新は上部「年間」セクションの統合ボタンから行えます）。</p>';
 
         if (empty($jq_qf)) {
             echo '<p style="color:#888;">四半期データがまだ取得されていません。上部の統合ボタンから取得するか、週次Cronの実行をお待ちください。</p>';
