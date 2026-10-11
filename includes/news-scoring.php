@@ -87,7 +87,7 @@ function wp_stocks_nws_setting($key, $default) {
 // 判定対象にする配信元（TDnetは初期オフ）
 function wp_stocks_nws_sources() {
     $saved = wp_stocks_nws_setting('sources', null);
-    $def = ['決算' => 1, 'EDINET' => 1, 'TDnet' => 0];
+    $def = ['決算' => 1, 'NQN' => 1, 'EDINET' => 1, 'TDnet' => 0];
     if (!is_array($saved)) return $def;
     foreach ($def as $k => $v) {
         if (array_key_exists($k, $saved)) $def[$k] = $saved[$k] ? 1 : 0;
@@ -127,6 +127,36 @@ function wp_stocks_nws_hit(array &$hits, array $P, $key, $group, $reason, $point
     $hits[] = ['type' => $key, 'group' => $group, 'points' => $pt, 'reason' => $reason];
 }
 
+// NQN「株価材料先取り」は関連銘柄コードが複数並ぶため、見出しの社名（略称）と登録銘柄名の前方一致で対象を決める
+function wp_stocks_nws_nqn_code($text, array $codes) {
+    global $wpdb;
+    if (!isset($wpdb) || !preg_match('/株価材料先取り\\(\\d+日\\)\\s*([^、,\\s]+?)[、,]/u', (string)$text, $m)) return '';
+    $abbr = $m[1];
+    $cand = [];
+    foreach ($codes as $c) { $c = strtoupper($c); $cand[] = $c; $cand[] = $c . '.T'; }
+    $ph = implode(',', array_fill(0, count($cand), '%s'));
+    $rows = $wpdb->get_results($wpdb->prepare("SELECT code, name FROM {$wpdb->prefix}stocks WHERE code IN ({$ph})", $cand));
+    $hit = [];
+    foreach ((array)$rows as $r) {
+        $n = mb_convert_kana((string)$r->name, 'as', 'UTF-8');
+        $n = preg_replace('/^[(（]株[)）]|[(（]株[)）]$|株式会社/u', '', $n);
+        if ($n !== '' && mb_strpos($n, $abbr) === 0) $hit[wp_stocks_nws_normalize_symbol($r->code)] = true;
+    }
+    return count($hit) === 1 ? (string)key($hit) : '';
+}
+
+// 金額文字列（475億円 / 1,200百万円 など）を百万円単位の数値へ
+function wp_stocks_nws_yen_million($num, $unit) {
+    $v = (float)str_replace(',', '', (string)$num);
+    $unit = (string)$unit;
+    if ($unit === '兆') return $v * 1000000;
+    if ($unit === '億') return $v * 100;
+    if ($unit === '千万') return $v * 10;
+    if ($unit === '百万') return $v;
+    if ($unit === '万') return $v / 100;
+    return $v / 1000000; // 円
+}
+
 // "<配信元>AI: 銘柄名(コード) 本文" を分解。銘柄コードが決まらなければ null
 function wp_stocks_nws_parse_headline($headline, $issues = '') {
     $h = mb_convert_kana((string)$headline, 'as', 'UTF-8'); // 全角英数・記号・空白を半角に
@@ -141,17 +171,86 @@ function wp_stocks_nws_parse_headline($headline, $issues = '') {
     } else {
         $codes = array_values(array_filter(array_map('trim', explode('|', (string)$issues)), 'strlen'));
         if (count($codes) === 1) $code = strtoupper($codes[0]);
+        elseif (count($codes) > 1 && $tag === 'NQN') $code = wp_stocks_nws_nqn_code($t, $codes);
     }
     if ($code === '') return null;
     return ['tag' => $tag, 'text' => $t, 'code' => $code];
+}
+
+// NQN「株価材料先取り」は1本に複数社の「▽社名、…」行が入っているため、行ごとに銘柄を決めて判定する
+// 戻り値: [['code','tag','hits'], ...]（対象行なしなら空配列）
+function wp_stocks_nws_classify_nqn_digest($headline, $body, $issues, $sources = null) {
+    global $wpdb;
+    $out = [];
+    $h = mb_convert_kana((string)$headline, 'as', 'UTF-8');
+    if (strpos($h, '<NQN>') !== 0 || strpos($h, '株価材料先取り') === false || !isset($wpdb)) return $out;
+    $codes = [];
+    foreach (explode('|', (string)$issues) as $c) { $c = strtoupper(trim($c)); if ($c !== '') $codes[] = $c; }
+    if (!$codes) return $out;
+    $names = wp_stocks_nws_registered_names($codes);
+    if (!$names) return $out;
+    if ($sources === null) $sources = wp_stocks_nws_sources();
+
+    $lines = [];
+    foreach (preg_split('/\r\n|\r|\n/', mb_convert_kana((string)$body, 'as', 'UTF-8')) as $ln) {
+        $ln = trim($ln);
+        if (mb_strpos($ln, '▽') === 0) $lines[] = trim(mb_substr($ln, 1));
+    }
+    if (!$lines) return $out;
+    foreach ($lines as $ln) {
+        $code = wp_stocks_nws_match_company($ln, $names);
+        if ($code === '') continue;
+        $r = wp_stocks_nws_classify_core('NQN', '株価材料先取り ' . $ln, $code, $sources);
+        if ($r && $r['hits']) $out[] = $r;
+    }
+    return $out;
+}
+
+// 候補コードのうち登録済み銘柄の名前 [code => 正規化した名前]
+function wp_stocks_nws_registered_names(array $codes) {
+    global $wpdb;
+    $cand = [];
+    foreach ($codes as $c) { $cand[] = $c; $cand[] = $c . '.T'; }
+    $ph = implode(',', array_fill(0, count($cand), '%s'));
+    $rows = $wpdb->get_results($wpdb->prepare("SELECT code, name FROM {$wpdb->prefix}stocks WHERE code IN ({$ph})", $cand));
+    $names = [];
+    foreach ((array)$rows as $r) {
+        $n = mb_convert_kana((string)$r->name, 'as', 'UTF-8');
+        $n = preg_replace('/^[(（]株[)）]|[(（]株[)）]$|株式会社/u', '', $n);
+        $n = mb_strtoupper(trim($n));
+        if ($n !== '') $names[wp_stocks_nws_normalize_symbol($r->code)] = $n;
+    }
+    return $names;
+}
+
+// 行頭の社名（略称）が、登録銘柄名の前方と2文字以上一致し、直後が「、 の が は ,」なら、その銘柄コード（最長一致・同点は不明）
+function wp_stocks_nws_match_company($line, array $names) {
+    $L = mb_strtoupper(mb_convert_kana((string)$line, 'as', 'UTF-8'));
+    $best = 0; $bestcode = ''; $tie = false;
+    foreach ($names as $code => $n) {
+        $max = min(mb_strlen($n), mb_strlen($L) - 1);
+        for ($len = $max; $len >= 2; $len--) {
+            if (mb_substr($L, 0, $len) !== mb_substr($n, 0, $len)) continue;
+            $next = mb_substr($L, $len, 1);
+            if (in_array($next, ['、', ',', 'の', 'が', 'は'], true)) {
+                if ($len > $best) { $best = $len; $bestcode = $code; $tie = false; }
+                elseif ($len === $best && $bestcode !== $code) $tie = true;
+                break;
+            }
+        }
+    }
+    return ($best >= 2 && !$tie) ? $bestcode : '';
 }
 
 // 見出し1本を判定。戻り値: null（対象外）または ['code','tag','hits'=>[['type','group','points','reason']...]]
 function wp_stocks_nws_classify($headline, $issues = '', $sources = null) {
     $p = wp_stocks_nws_parse_headline($headline, $issues);
     if (!$p) return null;
-    $tag = $p['tag'];
-    $t = $p['text'];
+    return wp_stocks_nws_classify_core($p['tag'], $p['text'], $p['code'], $sources);
+}
+
+// 1本分のテキストを判定（銘柄コードは呼び出し側で決定済み）
+function wp_stocks_nws_classify_core($tag, $t, $code, $sources = null) {
     $P = wp_stocks_nws_points();
     if ($sources === null) $sources = wp_stocks_nws_sources();
 
@@ -214,6 +313,20 @@ function wp_stocks_nws_classify($headline, $issues = '', $sources = null) {
             }
         }
 
+        // --- <NQN> 株価材料先取り：業績予想の修正 ---
+        if ($tag === 'NQN' && strpos($t, '株価材料先取り') !== false && preg_match('/(上方修正|下方修正)/u', $t, $x)) {
+            $up = ($x[1] === '上方修正');
+            $mag = null;
+            if (preg_match('/([0-9][0-9,.]*)(兆|億|千万|百万|万)?円に(?:上方|下方)修正\s*([0-9][0-9,.]*)(兆|億|千万|百万|万)?円から/u', $t, $q)) {
+                $new = wp_stocks_nws_yen_million($q[1], $q[2] ?? '');
+                $old = wp_stocks_nws_yen_million($q[3], $q[4] ?? '');
+                if ($old > 0) $mag = abs($new - $old) / $old;
+            }
+            $big = ($mag !== null && $mag >= 0.15); // NQNは幅が読めないときは「小」扱い
+            $key = $up ? ($big ? 'rev_up' : 'rev_up_small') : ($big ? 'rev_down' : 'rev_down_small');
+            wp_stocks_nws_hit($hits, $P, $key, 'earnings', ($up ? '上方修正' : '下方修正') . ($mag !== null ? sprintf('（%.0f%%）', $mag * 100) : ''));
+        }
+
         // --- 配当（TDnet等の見出し） ---
         if (!preg_grep('/^dividend$/', array_column($hits, 'group'))) {
             if (strpos($t, '復配') !== false)              wp_stocks_nws_hit($hits, $P, 'div_revival', 'dividend', '復配');
@@ -222,9 +335,9 @@ function wp_stocks_nws_classify($headline, $issues = '', $sources = null) {
         }
 
         // --- 自社株買い ---
-        if (preg_match('/自社株買い|自己株式の取得|自己株式取得/u', $t) && !preg_match('/状況|結果|終了|完了|処分/u', $t)) {
+        if (preg_match('/自社株買い|自社株取得|自己株式の取得|自己株式取得/u', $t) && !preg_match('/状況|結果|終了|完了|処分/u', $t)) {
             $pct = null;
-            if (preg_match('/発行済み?株式(?:総)?数の([0-9.]+)%/u', $t, $x)) $pct = (float)$x[1];
+            if (preg_match('/発行済み?(?:株式(?:総)?数)?の([0-9.]+)%/u', $t, $x)) $pct = (float)$x[1];
             $big = ($pct !== null && $pct >= 3.0);
             wp_stocks_nws_hit($hits, $P, $big ? 'buyback_big' : 'buyback', 'buyback', '自社株買い' . ($pct !== null ? "（発行済み{$pct}%）" : ''));
         }
@@ -298,7 +411,7 @@ function wp_stocks_nws_classify($headline, $issues = '', $sources = null) {
         }
     }
 
-    return ['code' => $p['code'], 'tag' => $tag, 'hits' => $hits];
+    return ['code' => $code, 'tag' => $tag, 'hits' => $hits];
 }
 
 // ============================================================
@@ -380,7 +493,11 @@ function wp_stocks_nws_news_codes($headline, $issues) {
         $c = strtoupper(trim($c));
         if ($c !== '') $codes[] = $c;
     }
-    return count($codes) > 3 ? [] : $codes;
+    if (count($codes) > 3 || (count($codes) > 1 && strpos($h, '株価材料先取り') !== false)) {
+        $c = (strpos($h, '株価材料先取り') !== false) ? wp_stocks_nws_nqn_code($h, $codes) : '';
+        return $c !== '' ? [$c] : (count($codes) > 3 ? [] : $codes);
+    }
+    return $codes;
 }
 
 // 登録銘柄（日本株）のニュースを履歴テーブルへ。$full=trueは保存済みの全ニュースが対象
@@ -443,14 +560,14 @@ function wp_stocks_nws_classify_recent($full = false) {
     if ($full) {
         $min = $wpdb->get_var("SELECT MIN(news_date) FROM {$news_t}");
         if ($min) $wpdb->query($wpdb->prepare("DELETE FROM {$ev_t} WHERE source = 'auto' AND event_date >= %s", $min));
-        $rows = $wpdb->get_results("SELECT news_id, news_at, issues, headline FROM {$news_t} ORDER BY news_at ASC");
+        $rows = $wpdb->get_results("SELECT news_id, news_at, issues, headline, body FROM {$news_t} ORDER BY news_at ASC");
     } else {
         $last = (string)get_option('wp_stocks_nws_last_scan', '');
         if ($last !== '') {
             $since = (new DateTime($last, new DateTimeZone('Asia/Tokyo')))->modify('-1 hour')->format('Y-m-d H:i:s');
-            $rows = $wpdb->get_results($wpdb->prepare("SELECT news_id, news_at, issues, headline FROM {$news_t} WHERE fetched_at >= %s ORDER BY news_at ASC", $since));
+            $rows = $wpdb->get_results($wpdb->prepare("SELECT news_id, news_at, issues, headline, body FROM {$news_t} WHERE fetched_at >= %s ORDER BY news_at ASC", $since));
         } else {
-            $rows = $wpdb->get_results("SELECT news_id, news_at, issues, headline FROM {$news_t} ORDER BY news_at ASC");
+            $rows = $wpdb->get_results("SELECT news_id, news_at, issues, headline, body FROM {$news_t} ORDER BY news_at ASC");
         }
     }
 
@@ -458,9 +575,12 @@ function wp_stocks_nws_classify_recent($full = false) {
     $now = wp_stocks_nws_now();
     foreach ((array)$rows as $r) {
         $res['scanned']++;
-        $c = wp_stocks_nws_classify($r->headline, $r->issues, $sources);
-        if (!$c || !$c['hits']) continue;
-        foreach ($c['hits'] as $h) {
+        $results = wp_stocks_nws_classify_nqn_digest($r->headline, $r->body, $r->issues, $sources);
+        if (!$results) {
+            $c = wp_stocks_nws_classify($r->headline, $r->issues, $sources);
+            $results = ($c && $c['hits']) ? [$c] : [];
+        }
+        foreach ($results as $c) foreach ($c['hits'] as $h) {
             $ok = $wpdb->query($wpdb->prepare(
                 "INSERT INTO {$ev_t} (news_id, code, event_at, event_date, event_type, event_group, points, reason, headline, source, created_at)
                  VALUES (%s, %s, %s, %s, %s, %s, %f, %s, %s, 'auto', %s)
@@ -557,7 +677,9 @@ function wp_stocks_nws_score_rows(array $rows, $today_ymd = null) {
         if ($w <= 0.0) continue;
         $g = $r['event_group'];
         if (strpos($g, 'manual_') === 0) { $items[$i]['counted'] = true; continue; } // 手動は全件加算
-        if (!isset($best[$g]) || abs($eff) > abs($items[$best[$g]]['eff'])) $best[$g] = $i;
+        $cur = isset($best[$g]) ? $items[$best[$g]]['eff'] : null;
+        // 同じ強さなら悪いほう（マイナス）を採用して控えめに見る
+        if ($cur === null || abs($eff) > abs($cur) || (abs($eff) == abs($cur) && $eff < $cur)) $best[$g] = $i;
     }
     foreach ($best as $i) $items[$i]['counted'] = true;
     $sum = 0.0;
@@ -734,7 +856,7 @@ function wp_stocks_nws_handle_action() {
         }
         update_option('wp_stocks_nws_points', $pts, false);
         $src = [];
-        foreach (['決算', 'EDINET', 'TDnet'] as $s) $src[$s] = !empty($_POST['src'][$s]) ? 1 : 0;
+        foreach (['決算', 'NQN', 'EDINET', 'TDnet'] as $s) $src[$s] = !empty($_POST['src'][$s]) ? 1 : 0;
         update_option('wp_stocks_nws_settings', [
             'sources'   => $src,
             'score_div' => max(0.5, (float)($_POST['score_div'] ?? 2)),
@@ -896,7 +1018,7 @@ function wp_stocks_nws_page($embedded = false) {
     echo '<table class="form-table"><tbody>';
 
     echo '<tr><th>判定に使う配信元</th><td>';
-    foreach (['決算' => '&lt;決算&gt;（決算・修正の速報）', 'EDINET' => '&lt;EDINET&gt;（臨時報告書など）', 'TDnet' => '&lt;TDnet&gt;（適時開示・決算スコア付き）'] as $k => $lbl) {
+    foreach (['決算' => '&lt;決算&gt;（決算・修正の速報）', 'NQN' => '&lt;NQN&gt;（株価材料先取り：修正・増配など）', 'EDINET' => '&lt;EDINET&gt;（臨時報告書など）', 'TDnet' => '&lt;TDnet&gt;（適時開示・決算スコア付き）'] as $k => $lbl) {
         echo '<label style="margin-right:16px;"><input type="checkbox" name="src[' . esc_attr($k) . ']" value="1"' . checked(!empty($src[$k]), true, false) . '> ' . $lbl . '</label>';
     }
     echo '<p class="description">TDnetをオフにすると、決算スコア・自社株買い・TOB・提携・特別損益・不祥事などは判定されません（&lt;決算&gt;の修正・増減益は残ります）。変更後は「再判定」を押してください。</p></td></tr>';
