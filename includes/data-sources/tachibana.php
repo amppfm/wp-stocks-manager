@@ -802,3 +802,59 @@ if (did_action('init')) {
 } else {
     add_action('init', 'wp_stocks_tachibana_news_schedule');
 }
+
+
+// ----------------------------------------------------------------
+// 立花ニュース: 当日分の手動取得（設定ページのボタンから）
+//   cron と同じ wp_stocks_tachibana_news_run('today') を使うので、ロックと古い分の削除も同じ動きになる
+// ----------------------------------------------------------------
+function wp_stocks_tachibana_news_handle_fetch_today() {
+    if (!current_user_can('manage_options')) {
+        wp_die('権限がありません。');
+    }
+    check_admin_referer('wp_stocks_tcn_fetch_today');
+
+    $r = wp_stocks_tachibana_news_run('today');
+    if ($r === null) {
+        $r = ['locked' => true];
+    }
+    set_transient('wp_stocks_tcn_manual_result', $r, 300);
+
+    $back = wp_get_referer();
+    wp_safe_redirect($back ? $back : admin_url());
+    exit;
+}
+add_action('admin_post_wp_stocks_tcn_fetch_today', 'wp_stocks_tachibana_news_handle_fetch_today');
+
+// 結果は管理画面上部の通知として1回だけ表示する（タブが閉じていても見える）
+add_action('admin_notices', function () {
+    $r = get_transient('wp_stocks_tcn_manual_result');
+    if (!$r || !is_array($r)) return;
+    delete_transient('wp_stocks_tcn_manual_result');
+
+    if (!empty($r['locked'])) {
+        $class = 'warning';
+        $text  = '立花ニュース: 別の取得が実行中のため、手動取得をスキップしました。しばらくしてからもう一度お試しください。';
+    } else {
+        $rows = (int)($r['rows'] ?? 0);
+        $text = sprintf(
+            '立花ニュース手動取得（%s）: 取得%d件・追加%d件・既存%d件・失敗%d件',
+            (string)($r['date'] ?? ''),
+            $rows,
+            (int)($r['inserted'] ?? 0),
+            (int)($r['skipped'] ?? 0),
+            (int)($r['failed'] ?? 0)
+        );
+        $err = (string)($r['error'] ?? '');
+        if ($err !== '') {
+            $class = 'error';
+            $text .= ' ／ エラー: ' . $err;
+        } elseif ($rows === 0) {
+            $class = 'warning';
+            $text .= ' ／ 0件でした（配信前か、サーバー側の反映待ちの可能性があります）';
+        } else {
+            $class = 'success';
+        }
+    }
+    echo '<div class="notice notice-' . esc_attr($class) . ' is-dismissible"><p>' . esc_html($text) . '</p></div>';
+});

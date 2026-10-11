@@ -404,6 +404,7 @@ function wp_stocks_settings_page() {
         'api'         => '🔑 外部API連携',
         'news'        => '📰 ニュースRSS',
         'tcn'         => '📡 立花ニュース',
+        'nws'         => '📰 ニュース加減点',
         'signal'      => '🎯 複合シグナル判定',
     ];
     echo '<ul class="wp-stocks-settings-tabs" style="display:flex;gap:0;border-bottom:2px solid #0073aa;margin:0 0 20px 0;padding:0;list-style:none;flex-wrap:wrap;">';
@@ -482,7 +483,30 @@ function wp_stocks_settings_page() {
     echo '<p><button type="submit" name="wp_stocks_save_tcn" class="button button-primary">立花ニュース設定を保存</button></p>';
     echo '</form>';
     echo '</div>';
+    $tcn_manual_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_tcn_fetch_today'), 'wp_stocks_tcn_fetch_today');
+    echo '<hr style="margin:20px 0;">';
+    echo '<h3>手動取得</h3>';
+    echo '<p class="description">当日分のニュースを今すぐ取得します。取得後、保持期間を過ぎた分も削除されます。1日分で10〜20秒ほどかかります。</p>';
+    echo '<p><a href="' . esc_url($tcn_manual_url) . '" class="button" onclick="return confirm(\'当日分のニュースを今すぐ取得します。よろしいですか？\');">今すぐ当日分を取得</a></p>';
     echo '</div>'; // end panel: tcn
+    echo '<div class="wp-stocks-settings-panel" data-panel="nws" style="display:none;">';
+    if (function_exists('wp_stocks_nws_page')) {
+        wp_stocks_nws_page(true);
+    } else {
+        echo '<p>ニュース加減点モジュールが読み込まれていません。</p>';
+    }
+    echo '</div>'; // end panel: nws
+    // ?tab=xxx で指定されたタブを読み込み後に自動で開く（保存後に先頭のタブへ戻らないようにする）
+    echo '<script>
+    window.addEventListener("load", function () {
+        var want = new URLSearchParams(window.location.search).get("tab");
+        if (!want) return;
+        var tabs = document.querySelectorAll(".wp-stocks-settings-tab");
+        for (var i = 0; i < tabs.length; i++) {
+            if (tabs[i].getAttribute("data-panel") === want) { tabs[i].click(); break; }
+        }
+    });
+    </script>';
 
     // ------------------------------------------------------------------
     // メイン設定フォーム（スケジュール／手動実行／メンテナンス／外部API連携後半／複合シグナル判定）

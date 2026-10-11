@@ -32,6 +32,12 @@ function wp_stocks_classify_signal($tech, $latest_price = null) {
         'fib_near'            => false, // 主要フィボナッチ水準に接近
         'oscillator_reversal_buy'  => false, // RSI売られ過ぎ＋厳格な陽線反転
         'oscillator_reversal_sell' => false, // RSI買われ過ぎ＋厳格な陰線反転
+        'ichimoku_tk_bullish'  => false, // 一目：雲の上で転換線が基準線を上抜け
+        'ichimoku_tk_bearish'  => false, // 一目：雲の下で転換線が基準線を下抜け
+        'ichimoku_cloud_up'    => false, // 一目：株価が雲を上抜け
+        'ichimoku_cloud_down'  => false, // 一目：株価が雲を下抜け
+        'volume_surge'         => false, // 出来高急増（20日平均の1.5倍以上）
+        'volume_thin'          => false, // 出来高閑散（20日平均の0.7倍未満）
     ];
     if (!$tech) return $result;
 
@@ -105,6 +111,29 @@ function wp_stocks_classify_signal($tech, $latest_price = null) {
     }
     // ⑨ フィボナッチ：主要水準への接近
     if (intval($tech->fib_near ?? 0) === 1) $result['fib_near'] = true;
+    // ⑩ 一目均衡表：転換線・基準線クロス（雲内外フィルター付き）／雲抜け
+    $tk_now = $tech->tenkan ?? null;  $kj_now = $tech->kijun ?? null;
+    $tk_prv = $tech->prev_tenkan ?? null; $kj_prv = $tech->prev_kijun ?? null;
+    $cp_now = $tech->cloud_position ?? null; $cp_prv = $tech->prev_cloud_position ?? null;
+    if ($tk_now !== null && $kj_now !== null && $tk_prv !== null && $kj_prv !== null && $cp_now !== null) {
+        $tk_now = floatval($tk_now); $kj_now = floatval($kj_now);
+        $tk_prv = floatval($tk_prv); $kj_prv = floatval($kj_prv);
+        $cp_i   = intval($cp_now);
+        if ($tk_prv <= $kj_prv && $tk_now > $kj_now && $cp_i === 1)  $result['ichimoku_tk_bullish'] = true;
+        if ($tk_prv >= $kj_prv && $tk_now < $kj_now && $cp_i === -1) $result['ichimoku_tk_bearish'] = true;
+    }
+    if ($cp_now !== null && $cp_prv !== null) {
+        $cp_i = intval($cp_now); $cp_p = intval($cp_prv);
+        if ($cp_p <= 0 && $cp_i === 1)  $result['ichimoku_cloud_up']   = true;
+        if ($cp_p >= 0 && $cp_i === -1) $result['ichimoku_cloud_down'] = true;
+    }
+    // ⑪ 出来高：直近20日平均に対する当日の倍率
+    $vol_ratio_now = $tech->volume_ratio ?? null;
+    if ($vol_ratio_now !== null) {
+        $vol_ratio_now = floatval($vol_ratio_now);
+        if ($vol_ratio_now >= 1.5)     $result['volume_surge'] = true;
+        elseif ($vol_ratio_now < 0.7)  $result['volume_thin']  = true;
+    }
 
     return $result;
 }
@@ -130,6 +159,9 @@ function wp_stocks_signal_direction_map() {
         'narabi_aka'           => 'buy',
         // ★追加：オシレーター反転確認
         'oscillator_reversal_buy' => 'buy', 'oscillator_reversal_sell' => 'sell',
+        // ★追加：一目均衡表
+        'ichimoku_tk_bullish' => 'buy', 'ichimoku_tk_bearish' => 'sell',
+        'ichimoku_cloud_up'   => 'buy', 'ichimoku_cloud_down' => 'sell',
     ];
 }
 
@@ -248,6 +280,8 @@ function wp_stocks_composite_signal_page() {
     $filter   = in_array($_GET['filter'] ?? '', ['watchlist', 'portfolio'], true) ? $_GET['filter'] : 'all';
     // ★変更：3タブ構成（シグナル／テクニカル／ローソク足）に変更し、既定タブを「シグナル」に
     $mtab     = in_array($_GET['mtab'] ?? '', ['signal', 'technical', 'candle'], true) ? $_GET['mtab'] : 'signal';
+    // ★追加：テクニカルタブ内の分類（トレンド系／オシレーター系／出来高系）
+    $stab     = in_array($_GET['stab'] ?? '', ['trend', 'oscillator', 'volume'], true) ? $_GET['stab'] : 'trend';
     $base_url = admin_url('admin.php?page=wp-stocks-signal');
 
     $signal_labels = [
@@ -269,6 +303,14 @@ function wp_stocks_composite_signal_page() {
         'sar_bullish_reversal' => 'SAR強気転換',
         'sar_bearish_reversal' => 'SAR弱気転換',
         'fib_near'             => 'フィボナッチ接近',
+        'oscillator_reversal_buy'  => 'オシレーター反転買い',
+        'oscillator_reversal_sell' => 'オシレーター反転売り',
+        'ichimoku_tk_bullish'  => '一目:転換線上抜け',
+        'ichimoku_tk_bearish'  => '一目:転換線下抜け',
+        'ichimoku_cloud_up'    => '一目:雲上抜け',
+        'ichimoku_cloud_down'  => '一目:雲下抜け',
+        'volume_surge'         => '出来高急増',
+        'volume_thin'          => '出来高閑散',
     ];
 
     // 全銘柄＋最新テクニカル＋最新株価を一括取得
@@ -298,6 +340,13 @@ function wp_stocks_composite_signal_page() {
         'dmi_buy'        => [], 'dmi_sell'       => [],
         'rci_oversold'   => [], 'rci_overbought' => [],
         'bb_oversold'    => [], 'bb_overbought'  => [],
+        'stoch_oversold' => [], 'stoch_overbought' => [],
+        'sar_bullish_reversal' => [], 'sar_bearish_reversal' => [],
+        'fib_near' => [],
+        'oscillator_reversal_buy' => [], 'oscillator_reversal_sell' => [],
+        'ichimoku_tk_bullish' => [], 'ichimoku_tk_bearish' => [],
+        'ichimoku_cloud_up' => [], 'ichimoku_cloud_down' => [],
+        'volume_surge' => [], 'volume_thin' => [],
     ];
     // ★追加：複合判定（5段階）のバケット。「シグナル」タブで使用
     $composite_buckets = [
@@ -344,7 +393,7 @@ function wp_stocks_composite_signal_page() {
         });
     };
     // $buckets のうち「売り方向」のバケットは昇順（マイナスが大きい順）にする
-    $wp_stocks_sell_direction_buckets = ['tentative_sell', 'chase_sell', 'overbought', 'dmi_sell', 'rci_overbought', 'bb_overbought'];
+    $wp_stocks_sell_direction_buckets = ['tentative_sell', 'chase_sell', 'overbought', 'dmi_sell', 'rci_overbought', 'bb_overbought', 'stoch_overbought', 'sar_bearish_reversal', 'oscillator_reversal_sell', 'ichimoku_tk_bearish', 'ichimoku_cloud_down'];
     foreach ($buckets as $wp_stocks_bkey => &$wp_stocks_bucket_ref) {
         $wp_stocks_sort_by_composite($wp_stocks_bucket_ref, in_array($wp_stocks_bkey, $wp_stocks_sell_direction_buckets, true));
     }
@@ -407,6 +456,10 @@ function wp_stocks_composite_signal_page() {
         echo '<td>' . $change_html . '</td>';
         echo '<td>' . ($tech ? wp_stocks_trend_icon_html($tech) : '<span style="color:#aaa;">-</span>') . '</td>';
         echo '<td>' . $composite_html . '</td>';
+        if (in_array($bucket_key, ['volume_surge', 'volume_thin'], true)) {
+            $vr_show = ($tech && $tech->volume_ratio !== null) ? number_format(floatval($tech->volume_ratio), 2) . '倍' : '-';
+            echo '<td>' . esc_html($vr_show) . '</td>';
+        }
         echo '<td style="font-size:11px;color:#888;">' . esc_html($judged_at) . '</td>';
         echo '</tr>';
     };
@@ -418,7 +471,7 @@ function wp_stocks_composite_signal_page() {
             return;
         }
         echo '<table class="widefat fixed striped" style="font-size:12px;margin-bottom:20px;">';
-        echo '<thead><tr><th>コード</th><th>銘柄名</th><th>セクター</th><th>現在値</th><th>前日比</th><th>トレンド</th><th>複合判定</th><th>判定日時</th></tr></thead><tbody>';
+        echo '<thead><tr><th>コード</th><th>銘柄名</th><th>セクター</th><th>現在値</th><th>前日比</th><th>トレンド</th><th>複合判定</th>' . (in_array($bucket_key, ['volume_surge', 'volume_thin'], true) ? '<th>出来高比</th>' : '') . '<th>判定日時</th></tr></thead><tbody>';
         foreach ($stocks_list as $s) $render_stock_row($s, $bucket_key);
         echo '</tbody></table>';
     };
@@ -496,7 +549,7 @@ function wp_stocks_composite_signal_page() {
     foreach (['jp' => '&#x1F1EF;&#x1F1F5; 日本株（' . $jp_count . '）', 'us' => '&#x1F1FA;&#x1F1F8; 米国株（' . $us_count . '）'] as $key => $label) {
         $active = $tab === $key;
         // ★修正：mtab=technicalを引き継がないと日本株/米国株切替時に既定タブ（シグナル）へ戻ってしまうため追加
-        $url    = $base_url . '&tab=' . $key . '&filter=' . $filter . '&mtab=technical';
+        $url    = $base_url . '&tab=' . $key . '&filter=' . $filter . '&mtab=technical&stab=' . $stab;
         echo '<a href="' . esc_url($url) . '" style="display:inline-block;padding:10px 20px;margin-right:4px;margin-bottom:-3px;border-radius:4px 4px 0 0;text-decoration:none;font-size:14px;font-weight:bold;'
             . ($active ? 'background:#0073aa;color:#fff;border:3px solid #0073aa;border-bottom:none;' : 'background:#f0f0f0;color:#555;border:1px solid #ddd;border-bottom:none;')
             . '">' . $label . '</a>';
@@ -509,7 +562,7 @@ function wp_stocks_composite_signal_page() {
     echo '<div style="margin-bottom:15px;display:flex;gap:8px;">';
     foreach (['all' => '全て', 'watchlist' => '&#x2605; 注目株のみ', 'portfolio' => '&#x1F4C1; ポートフォリオのみ'] as $fkey => $flabel) {
         $is_factive = $filter === $fkey;
-        $furl = $base_url . '&tab=' . $tab . '&filter=' . $fkey . '&mtab=technical';
+        $furl = $base_url . '&tab=' . $tab . '&filter=' . $fkey . '&mtab=technical&stab=' . $stab;
         echo '<a href="' . esc_url($furl) . '" class="button" style="'
             . ($is_factive ? 'background:#0073aa;color:#fff;border-color:#005f8b;' : '')
             . 'font-weight:bold;">' . $flabel . '</a>';
@@ -536,68 +589,71 @@ function wp_stocks_composite_signal_page() {
     $wp_stocks_sort_by_composite($buckets['oscillator_oversold'], false);
     $wp_stocks_sort_by_composite($buckets['oscillator_overbought'], true);
 
-    // シグナル一覧サマリーテーブル（件数＋アンカーリンク）
-    $summary_rows = [
-        ['tentative_buy',        '&#x1F7E2; 打診買い（ゴールデンクロス）'],
-        ['tentative_sell',       '&#x1F534; 打診売り（デッドクロス）'],
-        ['chase_buy',            '&#x1F7E2; 追撃買い（上昇モメンタム継続）'],
-        ['chase_sell',           '&#x1F534; 追撃売り（下降モメンタム継続）'],
-        ['oscillator_oversold',   '&#x1F535; 売られ過ぎ（RSI&le;30 または RCI&le;-80）'],
-        ['oscillator_overbought', '&#x1F7E0; 買われ過ぎ（RSI&ge;70 または RCI&ge;80）'],
-        ['dmi_buy',              '&#x1F7E2; DMI買い（+DI優勢・ADX&ge;25）'],
-        ['dmi_sell',             '&#x1F534; DMI売り（-DI優勢・ADX&ge;25）'],
-        ['bb_oversold',          '&#x1F535; BB下限突破（-2&sigma;・逆張り買い）'],
-        ['bb_overbought',        '&#x1F7E0; BB上限突破（+2&sigma;・逆張り売り）'],
+    // ★変更：シグナルが増えたため、テクニカルタブ内を「トレンド系／オシレーター系／出来高系」に分類
+    // 各行：[バケットキー, 表示ラベル, 見出し色, 裏付けバッジ用キー]
+    $tech_groups = [
+        'trend' => ['&#x1F4C8; トレンド系', [
+            ['tentative_buy',        '&#x1F7E2; 打診買い（ゴールデンクロス）',               '#27ae60', 'tentative_buy'],
+            ['tentative_sell',       '&#x1F534; 打診売り（デッドクロス）',                   '#e74c3c', 'tentative_sell'],
+            ['chase_buy',            '&#x1F7E2; 追撃買い（上昇モメンタム継続）',             '#27ae60', 'chase_buy'],
+            ['chase_sell',           '&#x1F534; 追撃売り（下降モメンタム継続）',             '#e74c3c', 'chase_sell'],
+            ['dmi_buy',              '&#x1F7E2; DMI買い（+DI優勢・ADX&ge;25）',              '#27ae60', 'dmi_buy'],
+            ['dmi_sell',             '&#x1F534; DMI売り（-DI優勢・ADX&ge;25）',              '#e74c3c', 'dmi_sell'],
+            ['ichimoku_tk_bullish',  '&#x1F7E2; 一目：転換線が基準線を上抜け（雲の上）',     '#27ae60', 'ichimoku_tk_bullish'],
+            ['ichimoku_tk_bearish',  '&#x1F534; 一目：転換線が基準線を下抜け（雲の下）',     '#e74c3c', 'ichimoku_tk_bearish'],
+            ['ichimoku_cloud_up',    '&#x1F7E2; 一目：株価が雲を上抜け',                     '#27ae60', 'ichimoku_cloud_up'],
+            ['ichimoku_cloud_down',  '&#x1F534; 一目：株価が雲を下抜け',                     '#e74c3c', 'ichimoku_cloud_down'],
+            ['sar_bullish_reversal', '&#x1F7E2; パラボリックSAR：買いに転換',                '#27ae60', 'sar_bullish_reversal'],
+            ['sar_bearish_reversal', '&#x1F534; パラボリックSAR：売りに転換',                '#e74c3c', 'sar_bearish_reversal'],
+        ]],
+        'oscillator' => ['&#x1F4C9; オシレーター系', [
+            ['oscillator_oversold',    '&#x1F535; 売られ過ぎ（RSI&le;30 または RCI&le;-80）', '#3498db', 'oversold'],
+            ['oscillator_overbought',  '&#x1F7E0; 買われ過ぎ（RSI&ge;70 または RCI&ge;80）', '#f39c12', 'overbought'],
+            ['stoch_oversold',         '&#x1F535; ストキャス売られ過ぎ（%K&le;20）',          '#3498db', 'stoch_oversold'],
+            ['stoch_overbought',       '&#x1F7E0; ストキャス買われ過ぎ（%K&ge;80）',          '#f39c12', 'stoch_overbought'],
+            ['oscillator_reversal_buy',  '&#x1F7E2; オシレーター反転確認（売られ過ぎ＋陽線反転）', '#27ae60', 'oscillator_reversal_buy'],
+            ['oscillator_reversal_sell', '&#x1F534; オシレーター反転確認（買われ過ぎ＋陰線反転）', '#e74c3c', 'oscillator_reversal_sell'],
+            ['bb_oversold',            '&#x1F535; BB下限突破（-2&sigma;・逆張り買い）',        '#3498db', 'bb_oversold'],
+            ['bb_overbought',          '&#x1F7E0; BB上限突破（+2&sigma;・逆張り売り）',        '#f39c12', 'bb_overbought'],
+            ['fib_near',               '&#x1F4D0; フィボナッチ主要水準に接近',                 '#8e44ad', 'fib_near'],
+        ]],
+        'volume' => ['&#x1F4CA; 出来高系', [
+            ['volume_surge', '&#x1F525; 出来高急増（20日平均の1.5倍以上）', '#e67e22', 'volume_surge'],
+            ['volume_thin',  '&#x1F4A4; 出来高閑散（20日平均の0.7倍未満）', '#95a5a6', 'volume_thin'],
+        ]],
     ];
-    echo '<table class="widefat fixed striped" style="font-size:13px;max-width:480px;margin-bottom:25px;">';
+
+    // 分類タブ
+    echo '<ul style="display:flex;gap:0;margin:0 0 15px 0;padding:0;list-style:none;flex-wrap:wrap;border-bottom:1px solid #ccd0d4;">';
+    foreach ($tech_groups as $gkey => $gdef) {
+        $g_active = $stab === $gkey;
+        $g_url    = $base_url . '&tab=' . $tab . '&filter=' . $filter . '&mtab=technical&stab=' . $gkey;
+        $g_style  = $g_active
+            ? 'display:block;padding:8px 16px;background:#23282d;color:#fff;text-decoration:none;font-size:13px;font-weight:bold;border-radius:4px 4px 0 0;'
+            : 'display:block;padding:8px 16px;background:#f6f7f7;color:#555;text-decoration:none;font-size:13px;border-radius:4px 4px 0 0;border:1px solid #ddd;border-bottom:none;';
+        echo '<li style="margin:0 2px 0 0;"><a href="' . esc_url($g_url) . '" style="' . $g_style . '">' . $gdef[0] . '</a></li>';
+    }
+    echo '</ul>';
+
+    $current_rows = $tech_groups[$stab][1];
+
+    // シグナル一覧サマリーテーブル（件数＋アンカーリンク）
+    echo '<table class="widefat fixed striped" style="font-size:13px;max-width:560px;margin-bottom:25px;">';
     echo '<thead><tr><th>シグナル</th><th style="text-align:right;">該当銘柄数</th></tr></thead><tbody>';
-    foreach ($summary_rows as $row) {
+    foreach ($current_rows as $row) {
         list($key, $label) = $row;
-        $cnt = count($buckets[$key]);
-        echo '<tr><td><a href="#sig_' . esc_attr($key) . '">' . $label . '</a></td><td style="text-align:right;">' . intval($cnt) . ' 銘柄</td></tr>';
+        echo '<tr><td><a href="#sig_' . esc_attr($key) . '">' . $label . '</a></td><td style="text-align:right;">' . intval(count($buckets[$key] ?? [])) . ' 銘柄</td></tr>';
     }
     echo '</tbody></table>';
 
-    // ★変更：各バケットをアコーディオン化（クリックで開閉）。見出しにも件数を表示する。
-    wp_stocks_accordion_open('sig_tentative_buy', '<span style="border-left:4px solid #27ae60;padding-left:10px;font-size:15px;font-weight:bold;">&#x1F7E2; 打診買い（ゴールデンクロス）（' . count($buckets['tentative_buy']) . '銘柄）</span>');
-    $render_bucket_table($buckets['tentative_buy'], 'tentative_buy');
-    wp_stocks_accordion_close();
-
-    wp_stocks_accordion_open('sig_tentative_sell', '<span style="border-left:4px solid #e74c3c;padding-left:10px;font-size:15px;font-weight:bold;">&#x1F534; 打診売り（デッドクロス）（' . count($buckets['tentative_sell']) . '銘柄）</span>');
-    $render_bucket_table($buckets['tentative_sell'], 'tentative_sell');
-    wp_stocks_accordion_close();
-
-    wp_stocks_accordion_open('sig_chase_buy', '<span style="border-left:4px solid #27ae60;padding-left:10px;font-size:15px;font-weight:bold;">&#x1F7E2; 追撃買い（上昇モメンタム継続）（' . count($buckets['chase_buy']) . '銘柄）</span>');
-    $render_bucket_table($buckets['chase_buy'], 'chase_buy');
-    wp_stocks_accordion_close();
-
-    wp_stocks_accordion_open('sig_chase_sell', '<span style="border-left:4px solid #e74c3c;padding-left:10px;font-size:15px;font-weight:bold;">&#x1F534; 追撃売り（下降モメンタム継続）（' . count($buckets['chase_sell']) . '銘柄）</span>');
-    $render_bucket_table($buckets['chase_sell'], 'chase_sell');
-    wp_stocks_accordion_close();
-
-    wp_stocks_accordion_open('sig_oscillator_oversold', '<span style="border-left:4px solid #3498db;padding-left:10px;font-size:15px;font-weight:bold;">&#x1F535; 売られ過ぎ（RSI&le;30 または RCI&le;-80）（' . count($buckets['oscillator_oversold']) . '銘柄）</span>');
-    $render_bucket_table($buckets['oscillator_oversold'], 'oversold');
-    wp_stocks_accordion_close();
-
-    wp_stocks_accordion_open('sig_oscillator_overbought', '<span style="border-left:4px solid #f39c12;padding-left:10px;font-size:15px;font-weight:bold;">&#x1F7E0; 買われ過ぎ（RSI&ge;70 または RCI&ge;80）（' . count($buckets['oscillator_overbought']) . '銘柄）</span>');
-    $render_bucket_table($buckets['oscillator_overbought'], 'overbought');
-    wp_stocks_accordion_close();
-
-    wp_stocks_accordion_open('sig_dmi_buy', '<span style="border-left:4px solid #27ae60;padding-left:10px;font-size:15px;font-weight:bold;">&#x1F7E2; DMI買い（+DI優勢・ADX&ge;25）（' . count($buckets['dmi_buy']) . '銘柄）</span>');
-    $render_bucket_table($buckets['dmi_buy'], 'dmi_buy');
-    wp_stocks_accordion_close();
-
-    wp_stocks_accordion_open('sig_dmi_sell', '<span style="border-left:4px solid #e74c3c;padding-left:10px;font-size:15px;font-weight:bold;">&#x1F534; DMI売り（-DI優勢・ADX&ge;25）（' . count($buckets['dmi_sell']) . '銘柄）</span>');
-    $render_bucket_table($buckets['dmi_sell'], 'dmi_sell');
-    wp_stocks_accordion_close();
-
-    wp_stocks_accordion_open('sig_bb_oversold', '<span style="border-left:4px solid #3498db;padding-left:10px;font-size:15px;font-weight:bold;">&#x1F535; BB下限突破（-2&sigma;・逆張り買い）（' . count($buckets['bb_oversold']) . '銘柄）</span>');
-    $render_bucket_table($buckets['bb_oversold'], 'bb_oversold');
-    wp_stocks_accordion_close();
-
-    wp_stocks_accordion_open('sig_bb_overbought', '<span style="border-left:4px solid #f39c12;padding-left:10px;font-size:15px;font-weight:bold;">&#x1F7E0; BB上限突破（+2&sigma;・逆張り売り）（' . count($buckets['bb_overbought']) . '銘柄）</span>');
-    $render_bucket_table($buckets['bb_overbought'], 'bb_overbought');
-    wp_stocks_accordion_close();
+    // 各バケットをアコーディオン化（クリックで開閉）。見出しにも件数を表示する。
+    foreach ($current_rows as $row) {
+        list($key, $label, $color, $badge_key) = $row;
+        $list = $buckets[$key] ?? [];
+        wp_stocks_accordion_open('sig_' . $key, '<span style="border-left:4px solid ' . $color . ';padding-left:10px;font-size:15px;font-weight:bold;">' . $label . '（' . count($list) . '銘柄）</span>');
+        $render_bucket_table($list, $badge_key);
+        wp_stocks_accordion_close();
+    }
 
     echo '</div>';
 
