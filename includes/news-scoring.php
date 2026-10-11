@@ -419,7 +419,13 @@ function wp_stocks_nws_classify_core($tag, $t, $code, $sources = null) {
             }
             $big = ($mag !== null && $mag >= 0.15); // NQNは幅が読めないときは「小」扱い
             $key = $up ? ($big ? 'rev_up' : 'rev_up_small') : ($big ? 'rev_down' : 'rev_down_small');
-            wp_stocks_nws_hit($hits, $P, $key, 'earnings', ($up ? '上方修正' : '下方修正') . ($mag !== null ? sprintf('（%.0f%%）', $mag * 100) : ''));
+            $reason = ($up ? '上方修正' : '下方修正') . ($mag !== null ? sprintf('（%.0f%%）', $mag * 100) : '');
+            // 「営業益22％増に下方修正」のように、修正後も増益の見通しなら弱いマイナスにする
+            if (!$up && preg_match('/([0-9][0-9.,]*)\s*%\s*増\s*に\s*下方修正/u', $t, $g) && (float)str_replace(',', '', $g[1]) > 0 && ($P['rev_down_growth'] ?? -1) != 0) {
+                wp_stocks_nws_hit($hits, $P, 'rev_down_growth', 'earnings', '下方修正・増益予想は維持（前期比+' . $g[1] . '%）');
+            } else {
+                wp_stocks_nws_hit($hits, $P, $key, 'earnings', $reason);
+            }
         }
 
         // --- 配当（TDnet等の見出し） ---
