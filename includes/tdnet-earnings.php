@@ -354,13 +354,36 @@ function wp_stocks_tde_forecast_eps($stock_id) {
     return ['eps' => (float)$r->fc_eps, 'cons' => $cons, 'fy_end' => $r->fy_end];
 }
 
+// 直近の「業績予想の修正」ニュース（ニュース履歴から。決算短信の表が無い修正のお知らせも拾う）
+function wp_stocks_tde_render_revisions($stock_id, $standalone = false) {
+    global $wpdb;
+    if (!function_exists('wp_stocks_nws_history_ensure_table') || !wp_stocks_nws_history_ensure_table()) return;
+    $code = strtoupper(preg_replace('/\.T$/i', '', trim((string)$wpdb->get_var($wpdb->prepare("SELECT code FROM {$wpdb->prefix}stocks WHERE id = %d", $stock_id)))));
+    if ($code === '') return;
+    $since = (new DateTime('now', new DateTimeZone('Asia/Tokyo')))->modify('-180 days')->format('Y-m-d H:i:s');
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT news_at, headline, body FROM " . wp_stocks_nws_history_table() . " WHERE code = %s AND news_at >= %s AND LOCATE('予想', headline) > 0 AND LOCATE('修正', headline) > 0 ORDER BY news_at DESC LIMIT 5",
+        $code, $since));
+    if (!$rows) return;
+    if ($standalone) echo '<div style="background:#fff;border:1px solid #ddd;border-left:4px solid #0073aa;border-radius:6px;padding:12px 16px;margin-bottom:18px;max-width:900px;">';
+    echo '<div style="margin-top:' . ($standalone ? '0' : '10px') . ';font-size:12px;"><strong>業績予想の修正（直近180日）</strong>';
+    foreach ($rows as $r) {
+        $body = (string)$r->body;
+        if ($r->headline !== '' && strpos($body, $r->headline) === 0) $body = ltrim(substr($body, strlen($r->headline)), "\r\n");
+        echo '<details style="border-bottom:1px solid #f0f0f0;padding:3px 0;"><summary style="cursor:pointer;"><span style="color:#888;margin-right:8px;">' . esc_html(substr($r->news_at, 0, 16)) . '</span>' . esc_html($r->headline) . '</summary>'
+            . '<div style="padding:6px 0 2px;line-height:1.7;">' . ($body !== '' ? nl2br(esc_html($body)) : '<span style="color:#aaa;">（本文なし）</span>') . '</div></details>';
+    }
+    echo '</div>';
+    if ($standalone) echo '</div>';
+}
+
 // 財務タブ上部: 最新の決算短信（TDnet）の通期予想と比較
 function wp_stocks_tde_render_panel($stock_id) {
     global $wpdb;
     if (!wp_stocks_tde_ensure_table()) return;
     $r = $wpdb->get_row($wpdb->prepare(
         "SELECT * FROM " . wp_stocks_tde_results_table() . " WHERE stock_id = %d AND doc_title <> '' ORDER BY COALESCE(disclosed_at, period_end) DESC LIMIT 1", $stock_id));
-    if (!$r) return;
+    if (!$r) { wp_stocks_tde_render_revisions($stock_id, true); return; }
     $labels = ['revenue' => '売上高', 'op' => '営業利益', 'ord' => '経常利益', 'ni' => '純利益'];
     echo '<div style="background:#fff;border:1px solid #ddd;border-left:4px solid #0073aa;border-radius:6px;padding:12px 16px;margin-bottom:18px;max-width:900px;">';
     echo '<h3 style="margin:0 0 6px;font-size:14px;">&#x1F4C4; 最新の決算短信（TDnet）' . wp_stocks_tde_badge() . ($r->score !== null ? ' 決算スコア ' . esc_html(($r->score > 0 ? '+' : '') . $r->score) : '') . '</h3>';
@@ -384,6 +407,7 @@ function wp_stocks_tde_render_panel($stock_id) {
         echo '<p style="margin:8px 0 0;font-size:12px;">配当（年間）: 実績 ' . ($r->div_actual !== null ? esc_html(number_format($r->div_actual, 2)) . '円' : '-')
             . ' ／ 予想 ' . ($r->div_forecast !== null ? esc_html(number_format($r->div_forecast, 2)) . '円' : '-') . '</p>';
     }
+    wp_stocks_tde_render_revisions($stock_id);
     echo '<p class="description" style="margin:6px 0 0;">立花ニュースの決算短信から自動で取り込んだ値です。四半期データは、J-Quantsにまだ無い期だけ補います。</p>';
     echo '</div>';
 }
