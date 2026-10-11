@@ -68,6 +68,8 @@ function wp_stocks_index_history_upsert($symbol, array $rows, $source = 'yahoo')
     foreach ($rows as $r) {
         $date = isset($r['date']) ? (string) $r['date'] : '';
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) continue;
+        // 土日の日付の足は保存しない（Yahooは為替などで、休場中に現在値を載せた足を追加することがあるため）
+        if (intval(gmdate('N', strtotime($date . ' 00:00:00 UTC'))) >= 6) continue;
         if (!isset($r['close']) || $r['close'] === null || $r['close'] === '') continue;
 
         $values[] = $wpdb->prepare(
