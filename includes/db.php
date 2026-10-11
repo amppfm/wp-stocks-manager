@@ -423,6 +423,10 @@ function wp_stocks_manager_create_tables() {
         'cloud_bottom'   => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN cloud_bottom FLOAT DEFAULT NULL AFTER cloud_top",
         'cloud_position' => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN cloud_position TINYINT DEFAULT NULL AFTER cloud_bottom",
         'volume_ratio'   => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN volume_ratio FLOAT DEFAULT NULL AFTER cloud_position",
+        // ★追加：一目均衡表の前回値（個別シグナルの「クロス」「雲抜け」検出用）
+        'prev_tenkan'         => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN prev_tenkan FLOAT DEFAULT NULL AFTER volume_ratio",
+        'prev_kijun'          => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN prev_kijun FLOAT DEFAULT NULL AFTER prev_tenkan",
+        'prev_cloud_position' => "ALTER TABLE {$wpdb->prefix}stock_technicals ADD COLUMN prev_cloud_position TINYINT DEFAULT NULL AFTER prev_kijun",
     ] as $col => $sql) {
         if (!in_array($col, $tech_cols)) $wpdb->query($sql);
     }

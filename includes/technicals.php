@@ -619,6 +619,10 @@ function wp_stocks_save_technicals($stock_id, $symbol) {
     $result['prev_rci']         = $existing_row->rci         ?? null;
     $result['prev_stoch_k']     = $existing_row->stoch_k     ?? null;
     $result['prev_stoch_d']     = $existing_row->stoch_d     ?? null;
+    // ★追加：一目均衡表の前回値（テクニカルタブの個別シグナル用）
+    $result['prev_tenkan']         = $existing_row->tenkan         ?? null;
+    $result['prev_kijun']          = $existing_row->kijun          ?? null;
+    $result['prev_cloud_position'] = $existing_row->cloud_position ?? null;
 
     // ★変更：複合シグナル判定に時価総額（下地）も渡す。階層別の重み設定が無い間は結果は変わらない
     $stock_row_for_tier = $wpdb->get_row($wpdb->prepare(
