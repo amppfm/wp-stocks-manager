@@ -688,43 +688,41 @@ function wp_stocks_company_page() {
     echo '<h3>チャート</h3>';
     $is_usd_chart = ($stock->currency ?? 'JPY') === 'USD';
     $chart_symbol = $is_usd_chart ? $stock->code : $stock->code . '.T';
-    $url = "https://query1.finance.yahoo.com/v8/finance/chart/{$chart_symbol}?interval=1d&range=6mo";
-    $response = wp_remote_get($url, [
-        'headers' => ['User-Agent' => 'Mozilla/5.0'],
-        'timeout' => 20,
-    ]);
-    $body   = json_decode(wp_remote_retrieve_body($response), true);
-    $result = $body['chart']['result'][0] ?? null;
+    // ★2026-10-11変更：Yahoo直接取得（range=6mo）から wp_stocks_get_ohlcv() に変更。
+    // 日本株は立花の日足(500本)優先、それ以外はYahoo 2年分。6時間キャッシュ付き。
+    // 表示期間はJS側のボタンで切り替える（初期表示は1年）。指標はすべて全期間のデータから計算する。
+    $ohlcv = wp_stocks_get_ohlcv($chart_symbol);
 
-    if ($result) {
-        $timestamps = $result['timestamp'] ?? [];
-        $opens      = $result['indicators']['quote'][0]['open']   ?? [];
-        $highs      = $result['indicators']['quote'][0]['high']   ?? [];
-        $lows       = $result['indicators']['quote'][0]['low']    ?? [];
-        $closes     = $result['indicators']['quote'][0]['close']  ?? [];
-        $volumes    = $result['indicators']['quote'][0]['volume'] ?? [];
+    if (!empty($ohlcv)) {
+        // lightweight-charts は time の昇順・重複なしが必須
+        usort($ohlcv, function($a, $b) { return strcmp($a['date'], $b['date']); });
 
         $candle_data = [];
         $line_data   = [];
         $volume_data = [];
+        $seen_dates  = [];
 
-        foreach ($timestamps as $i => $ts) {
-            if (!isset($closes[$i]) || $closes[$i] === null) continue;
+        foreach ($ohlcv as $bar) {
+            $d = $bar['date'];
+            if (isset($seen_dates[$d])) continue;
+            $seen_dates[$d] = true;
+            $o = floatval($bar['open']);
+            $c = floatval($bar['close']);
             $candle_data[] = [
-                'time'  => date('Y-m-d', $ts),
-                'open'  => round(floatval($opens[$i]  ?? $closes[$i]), 1),
-                'high'  => round(floatval($highs[$i]  ?? $closes[$i]), 1),
-                'low'   => round(floatval($lows[$i]   ?? $closes[$i]), 1),
-                'close' => round(floatval($closes[$i]), 1),
+                'time'  => $d,
+                'open'  => round($o, 1),
+                'high'  => round(floatval($bar['high']), 1),
+                'low'   => round(floatval($bar['low']), 1),
+                'close' => round($c, 1),
             ];
             $line_data[] = [
-                'time'  => date('Y-m-d', $ts),
-                'value' => round(floatval($closes[$i]), 1),
+                'time'  => $d,
+                'value' => round($c, 1),
             ];
             $volume_data[] = [
-                'time'  => date('Y-m-d', $ts),
-                'value' => intval($volumes[$i] ?? 0),
-                'color' => floatval($closes[$i]) >= floatval($opens[$i] ?? $closes[$i]) ? '#e74c3c88' : '#3498db88',
+                'time'  => $d,
+                'value' => intval($bar['volume'] ?? 0),
+                'color' => $c >= $o ? '#e74c3c88' : '#3498db88',
             ];
         }
 
@@ -749,6 +747,10 @@ function wp_stocks_company_page() {
                 <button onclick="toggleIchimoku()" class="button button-small" id="btn_ichimoku">一目</button>
                 <button onclick="toggleFib()" class="button button-small" id="btn_fib">フィボナッチ</button>
                 <button onclick="toggleSAR()" class="button button-small" id="btn_sar">パラボリック</button>
+                 <span style="font-size:13px;color:#888;margin-left:10px;">期間：</span>
+                 <button onclick="setChartRange('6m')" class="button button-small" id="btn_r6m">6ヶ月</button>
+                 <button onclick="setChartRange('1y')" class="button button-small" id="btn_r1y" style="background:#0073aa;color:#fff;">1年</button>
+                 <button onclick="setChartRange('2y')" class="button button-small" id="btn_r2y">2年</button>
             </div>
             <div id="lwChart" style="width:100%;height:700px;"></div>
             <div id="lwChartHandle" style="width:100%;height:8px;background:#f0f0f0;cursor:ns-resize;display:flex;align-items:center;justify-content:center;border-top:1px solid #ddd;border-bottom:1px solid #ddd;margin:2px 0;">
@@ -1219,6 +1221,32 @@ function wp_stocks_company_page() {
             return result;
         }
 
+        // ★2026-10-11追加：表示期間（営業日の本数で指定。指標は全期間から計算済みなので表示範囲だけ切り替える）
+        var currentRange = '1y';
+        var RANGE_BARS = { '6m': 126, '1y': 252, '2y': 0 };   // 0 = 全期間
+
+        function applyChartRange() {
+            if (!mainChart || !candleRaw.length) return;
+            var n = RANGE_BARS[currentRange];
+            var last = candleRaw.length - 1;
+            if (!n || n >= candleRaw.length) {
+                mainChart.timeScale().fitContent();
+                return;
+            }
+            mainChart.timeScale().setVisibleLogicalRange({ from: last - n, to: last + 3 });
+        }
+
+        function setChartRange(r) {
+            currentRange = r;
+            ['6m', '1y', '2y'].forEach(function(k) {
+                var b = document.getElementById('btn_r' + k);
+                if (!b) return;
+                b.style.background = (k === r) ? '#0073aa' : '';
+                b.style.color      = (k === r) ? '#fff'    : '';
+            });
+            applyChartRange();
+        }
+
         function renderMain() {
             if (mainChart) { mainChart.remove(); mainChart = null; }
             document.getElementById('lwChart').innerHTML = '';
@@ -1330,7 +1358,7 @@ function wp_stocks_company_page() {
                 });
             }
 
-            mainChart.timeScale().fitContent();
+            applyChartRange();
             // メインチャートが作り直されたので同期リスナーを再登録
             syncMainToSub();
         }
