@@ -31,6 +31,7 @@ function wp_stocks_nws_point_defs() {
         'rev_up_small'    => ['上方修正（修正幅15%未満）', 3],
         'rev_down'        => ['下方修正（修正幅15%以上／幅不明）', -4],
         'rev_down_small'  => ['下方修正（修正幅15%未満）', -3],
+        'rev_down_growth' => ['下方修正（修正後も前期比で増益予想）', -1],
         'turn_black'      => ['営業利益 黒字転換', 3],
         'turn_red'        => ['営業利益 赤字転落', -3],
         'red_shrink'      => ['営業損失 赤字縮小', 1],
@@ -286,6 +287,61 @@ function wp_stocks_nws_classify($headline, $issues = '', $sources = null) {
     $p = wp_stocks_nws_parse_headline($headline, $issues);
     if (!$p) return null;
     return wp_stocks_nws_classify_core($p['tag'], $p['text'], $p['code'], $sources);
+}
+
+// 業績修正（TDnet AI）の本文から、修正後の通期予想の前期比(%)を取る。営業利益→経常利益→純利益の順。なければnull
+function wp_stocks_nws_revision_yoy_from_body($body) {
+    $t = mb_convert_kana((string)$body, 'as', 'UTF-8');
+    $t = str_replace(['−', '▲', '△'], '-', $t);
+    $pos = mb_strpos($t, '予想期');
+    if ($pos === false) return null;
+    $t = mb_substr($t, $pos);
+    $found = [];
+    $cur = '';
+    foreach (preg_split('/\r\n|\r|\n/', $t) as $ln) {
+        $ln = trim($ln);
+        if (preg_match('/^(売上高|営業利益|経常利益|税引前利益|純利益)\(百万円\)/u', $ln, $m)) { $cur = $m[1]; continue; }
+        if ($cur !== '' && preg_match('/^前期比\s+([+\-]?[0-9.]+)%/u', $ln, $m)) {
+            if (!isset($found[$cur])) $found[$cur] = (float)$m[1];
+            $cur = '';
+        }
+    }
+    foreach (['営業利益', '経常利益', '税引前利益', '純利益'] as $k) if (isset($found[$k])) return $found[$k];
+    return null;
+}
+
+// その日のTDnet AI「業績修正」から前期比を探す（同じ銘柄・同じ日）。キャッシュあり
+function wp_stocks_nws_revision_yoy($code, $date) {
+    global $wpdb;
+    static $cache = [];
+    $k = $code . '|' . $date;
+    if (array_key_exists($k, $cache)) return $cache[$k];
+    $news_t = $wpdb->prefix . 'stock_tachibana_news';
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT body FROM {$news_t} WHERE news_date = %s AND LOCATE(%s, issues) > 0 AND LOCATE('<TDnet>AI:', headline) = 1 AND LOCATE('業績修正', headline) > 0",
+        $date, '|' . $code . '|'));
+    $v = null;
+    foreach ((array)$rows as $r) {
+        $v = wp_stocks_nws_revision_yoy_from_body($r->body);
+        if ($v !== null) break;
+    }
+    return $cache[$k] = $v;
+}
+
+// 下方修正でも、修正後の予想が前期比で増益のままなら「弱いマイナス」に差し替える
+function wp_stocks_nws_soften_revision(array $c, $news_at) {
+    if (empty($c['hits']) || empty($c['code'])) return $c;
+    $P = wp_stocks_nws_points();
+    foreach ($c['hits'] as $i => $h) {
+        if (!in_array($h['type'], ['rev_down', 'rev_down_small'], true)) continue;
+        $yoy = wp_stocks_nws_revision_yoy($c['code'], substr($news_at, 0, 10));
+        if ($yoy === null || $yoy <= 0) continue;
+        $pt = (float)($P['rev_down_growth'] ?? -1);
+        if ($pt == 0.0) continue;
+        $c['hits'][$i] = ['type' => 'rev_down_growth', 'group' => $h['group'], 'points' => $pt,
+            'reason' => $h['reason'] . sprintf('・増益予想は維持（前期比+%.1f%%）', $yoy)];
+    }
+    return $c;
 }
 
 // 1本分のテキストを判定（銘柄コードは呼び出し側で決定済み）
@@ -619,7 +675,7 @@ function wp_stocks_nws_classify_recent($full = false) {
             $c = wp_stocks_nws_classify($r->headline, $r->issues, $sources);
             $results = ($c && $c['hits']) ? [$c] : [];
         }
-        foreach ($results as $c) foreach ($c['hits'] as $h) {
+        foreach ($results as $c) { $c = wp_stocks_nws_soften_revision($c, $r->news_at); foreach ($c['hits'] as $h) {
             $ok = $wpdb->query($wpdb->prepare(
                 "INSERT INTO {$ev_t} (news_id, code, event_at, event_date, event_type, event_group, points, reason, headline, source, created_at)
                  VALUES (%s, %s, %s, %s, %s, %s, %f, %s, %s, 'auto', %s)
@@ -629,7 +685,7 @@ function wp_stocks_nws_classify_recent($full = false) {
                 mb_substr($r->headline, 0, 480), $now
             ));
             if ($ok !== false) $res['events']++;
-        }
+        } }
     }
     wp_stocks_nws_archive_news($full);
     if (function_exists('wp_stocks_tde_ingest')) wp_stocks_tde_ingest($full); // 決算短信を財務データへ
