@@ -2,7 +2,7 @@
 /**
  * WP Stocks Manager — マーケット指数の日次履歴：取得・バックフィル・日次cron・状況表示
  * 2026-10-11 追加。保存先は index-history.php のテーブル（wp_stock_index_history）。
- * - 取得元はYahoo chart API（指数22本）。日次cronは直近3ヶ月、バックフィルは2年分を取る。
+ * - 取得元はYahoo chart API（指数＋テーマ・基準指数ETF）。日次cronは直近3ヶ月、バックフィルは2年分を取る。
  * - cronは本ファイル内で自己登録する（db.php の有効化フックに依存しない）。
  */
 
@@ -16,6 +16,12 @@ function wp_stocks_index_history_symbols() {
     foreach (wp_stocks_get_market_index_groups() as $items) {
         foreach ($items as $item) {
             $list[$item['symbol']] = $item['label'];
+        }
+    }
+    // テーマ・基準指数の系列（market-themes.php）も履歴の取得対象に含める
+    if (function_exists('wp_stocks_theme_reference_symbols')) {
+        foreach (wp_stocks_theme_reference_symbols() as $symbol => $label) {
+            $list[$symbol] = $label;
         }
     }
     return $list;
@@ -201,7 +207,7 @@ function wp_stocks_render_index_history_panel() {
     echo '<p style="color:#666;font-size:13px;">日次の自動更新：'
         . ($next_ts ? '次回 ' . esc_html(wp_date('Y-m-d H:i', $next_ts, new DateTimeZone('Asia/Tokyo'))) . '（日本時間）' : '未登録')
         . ' ／ 取得元：Yahoo!ファイナンス</p>';
-    echo '<p><a href="' . esc_url($backfill_url) . '" class="button" onclick="return confirm(\'指数22本の約2年分をYahooから取得します（1〜2分かかります）。よろしいですか？\');">'
+    echo '<p><a href="' . esc_url($backfill_url) . '" class="button" onclick="return confirm(\'登録されている指数・ETFの約2年分をYahooから取得します（数分かかります）。よろしいですか？\');">'
         . '&#x1F504; 指数の履歴を今すぐ取得（約2年分）</a></p>';
 
     echo '<table class="widefat striped" style="max-width:760px;"><thead><tr>'

@@ -38,15 +38,15 @@ function wp_stocks_index_period_returns($symbol) {
 // マーケット情報「指数」タブ：期間別騰落率の表（グループ別）
 // 色は同じタブの指数カードに合わせる（上昇=赤・下落=青）
 // --------------------------------------------------
-function wp_stocks_render_index_period_table() {
+function wp_stocks_render_index_period_table($groups = null, $title = null) {
     $periods = array_keys(wp_stocks_index_period_defs());
 
     echo '<div style="margin-top:35px;">';
-    echo '<h3>&#x1F4CA; 期間別騰落率</h3>';
+    echo '<h3>' . ($title !== null ? $title : '&#x1F4CA; 期間別騰落率') . '</h3>';
 
     $any = false;
     $body = '';
-    foreach (wp_stocks_get_market_index_groups() as $group_label => $items) {
+    foreach (($groups !== null ? $groups : wp_stocks_get_market_index_groups()) as $group_label => $items) {
         $body .= '<tr><td colspan="' . (count($periods) + 2) . '" style="padding:6px 12px;background:#f0f0f0;font-weight:bold;font-size:12px;color:#555;">'
             . esc_html($group_label) . '</td></tr>';
         foreach ($items as $item) {
@@ -86,6 +86,9 @@ function wp_stocks_render_index_period_table() {
     }
     echo '</tr></thead><tbody>' . $body . '</tbody></table></div>';
     echo '<p style="color:#888;font-size:12px;margin-top:6px;">日次履歴の終値で計算（期間は営業日数：1日=1、5日=5、1ヶ月=21、2ヶ月=42、6ヶ月=126、1年=252）。'
-        . '為替・先物は当日分が途中の値です。VIXと米国債10年利回りは値そのものの変化率です。</p>';
+        . ($groups === null
+            ? '為替・先物は当日分が途中の値です。VIXと米国債10年利回りは値そのものの変化率です。'
+            : '上場から日が浅いETFは、履歴が足りない期間が「-」になります。')
+        . '</p>';
     echo '</div>';
 }
