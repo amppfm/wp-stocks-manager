@@ -275,6 +275,8 @@ function wp_stocks_render_tachibana_news_tab() {
         }
         return $out;
     };
+    // ニュース加減点（点数の素の合計）。機能がなければ表示しない
+    $nws_marks = function_exists('wp_stocks_nws_page_marks') ? wp_stocks_nws_page_marks((array)$rows) : ['sum' => [], 'lines' => []];
     $all_codes = [];
     foreach ($rows as $r) {
         foreach ($parse($r->issues) as $c) $all_codes[$c] = true;
@@ -311,6 +313,7 @@ function wp_stocks_render_tachibana_news_tab() {
         echo '<details style="border-bottom:1px solid #f0f0f0;padding:6px 0;">';
         echo '<summary style="cursor:pointer;font-size:13px;">';
         echo '<span style="color:#888;margin-right:8px;">' . esc_html($time) . '</span>' . esc_html($headline);
+        if (isset($nws_marks['sum'][$r->news_id])) echo ' ' . wp_stocks_nws_badge($nws_marks['sum'][$r->news_id]);
         if ($n_codes > 0) {
             $short = implode(',', array_slice($codes, 0, 5)) . ($n_codes > 5 ? ' 他' . ($n_codes - 5) . '件' : '');
             echo ' <span style="color:#999;font-size:11px;">[' . esc_html($short) . ']</span>';
@@ -348,6 +351,16 @@ function wp_stocks_render_tachibana_news_tab() {
         } elseif (strpos($headline, '<決算>') === 0) {
             echo '<pre style="margin:0;overflow-x:auto;white-space:pre;font-family:monospace;font-size:12px;line-height:1.5;background:#fafafa;padding:8px;border:1px solid #eee;">'
                 . esc_html($body) . '</pre>';
+        } elseif (!empty($nws_marks['lines'][$r->news_id])) {
+            // NQN株価材料先取り: 登録銘柄の行の後ろに加減点を表示
+            $lm = $nws_marks['lines'][$r->news_id];
+            foreach (preg_split('/\r\n|\r|\n/', $body) as $ln) {
+                $key = trim(mb_convert_kana($ln, 'as', 'UTF-8'));
+                $key = (mb_strpos($key, '▽') === 0) ? trim(mb_substr($key, 1)) : '';
+                echo esc_html($ln);
+                if ($key !== '' && isset($lm[$key])) echo ' ' . wp_stocks_nws_badge($lm[$key]);
+                echo '<br>';
+            }
         } else {
             echo nl2br(esc_html($body));
         }

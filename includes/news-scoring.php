@@ -177,9 +177,9 @@ function wp_stocks_nws_parse_headline($headline, $issues = '') {
     return ['tag' => $tag, 'text' => $t, 'code' => $code];
 }
 
-// NQN「株価材料先取り」は1本に複数社の「▽社名、…」行が入っているため、行ごとに銘柄を決めて判定する
-// 戻り値: [['code','tag','hits'], ...]（対象行なしなら空配列）
-function wp_stocks_nws_classify_nqn_digest($headline, $body, $issues, $sources = null) {
+// NQN「株価材料先取り」の本文の「▽社名、…」行を、登録銘柄ごとに判定する
+// 戻り値: [['line'=>正規化した行, 'code'=>, 'r'=>classify_coreの結果], ...]（登録銘柄に決まった行だけ）
+function wp_stocks_nws_digest_lines($headline, $body, $issues, $sources = null) {
     global $wpdb;
     $out = [];
     $h = mb_convert_kana((string)$headline, 'as', 'UTF-8');
@@ -191,17 +191,56 @@ function wp_stocks_nws_classify_nqn_digest($headline, $body, $issues, $sources =
     if (!$names) return $out;
     if ($sources === null) $sources = wp_stocks_nws_sources();
 
-    $lines = [];
     foreach (preg_split('/\r\n|\r|\n/', mb_convert_kana((string)$body, 'as', 'UTF-8')) as $ln) {
         $ln = trim($ln);
-        if (mb_strpos($ln, '▽') === 0) $lines[] = trim(mb_substr($ln, 1));
-    }
-    if (!$lines) return $out;
-    foreach ($lines as $ln) {
+        if (mb_strpos($ln, '▽') !== 0) continue;
+        $ln = trim(mb_substr($ln, 1));
         $code = wp_stocks_nws_match_company($ln, $names);
         if ($code === '') continue;
         $r = wp_stocks_nws_classify_core('NQN', '株価材料先取り ' . $ln, $code, $sources);
-        if ($r && $r['hits']) $out[] = $r;
+        $out[] = ['line' => $ln, 'code' => $code, 'r' => $r];
+    }
+    return $out;
+}
+
+// NQN「株価材料先取り」は1本に複数社の行が入っているため、行ごとに銘柄を決めて判定する
+// 戻り値: [['code','tag','hits'], ...]（対象行なしなら空配列）
+function wp_stocks_nws_classify_nqn_digest($headline, $body, $issues, $sources = null) {
+    $out = [];
+    foreach (wp_stocks_nws_digest_lines($headline, $body, $issues, $sources) as $d) {
+        if ($d['r'] && $d['r']['hits']) $out[] = $d['r'];
+    }
+    return $out;
+}
+
+// ニュース一覧の表示用: 各ニュースの加減点（点数の素の合計。減衰は考慮しない）
+// 戻り値: ['sum' => [news_id => 点], 'lines' => [news_id => [正規化した行 => 点]]]
+function wp_stocks_nws_page_marks(array $rows) {
+    global $wpdb;
+    $out = ['sum' => [], 'lines' => []];
+    if (!$rows || !wp_stocks_nws_ensure_table()) return $out;
+    $sources = wp_stocks_nws_sources();
+    $digest_ids = [];
+    foreach ($rows as $r) {
+        $d = wp_stocks_nws_digest_lines($r->headline, $r->body ?? '', $r->issues, $sources);
+        if (!$d) continue;
+        $hn = mb_convert_kana((string)$r->headline, 'as', 'UTF-8');
+        foreach ($d as $x) {
+            $pts = 0.0;
+            if ($x['r']) foreach ($x['r']['hits'] as $h) $pts += (float)$h['points'];
+            if ($pts == 0.0) continue;
+            $out['lines'][$r->news_id][$x['line']] = $pts;
+            // 見出しは先頭行と同じ内容なので、見出しの横にもその点を出す
+            if (!isset($out['sum'][$r->news_id]) && mb_strpos($hn, $x['line']) !== false) $out['sum'][$r->news_id] = $pts;
+        }
+        $digest_ids[$r->news_id] = true;
+    }
+    $ids = [];
+    foreach ($rows as $r) if (!isset($digest_ids[$r->news_id])) $ids[] = (string)$r->news_id;
+    if ($ids) {
+        $ph = implode(',', array_fill(0, count($ids), '%s'));
+        $ev = $wpdb->get_results($wpdb->prepare("SELECT news_id, SUM(points) AS p FROM " . wp_stocks_nws_events_table() . " WHERE source = 'auto' AND news_id IN ({$ph}) GROUP BY news_id", $ids));
+        foreach ((array)$ev as $e) if ((float)$e->p != 0.0) $out['sum'][$e->news_id] = (float)$e->p;
     }
     return $out;
 }
@@ -269,7 +308,7 @@ function wp_stocks_nws_classify_core($tag, $t, $code, $sources = null) {
             if ($div <= 0) $div = 2;
             $pt = round(2 * $v / $div) / 2;
             $pt = max(-$cap, min($cap, $pt));
-            wp_stocks_nws_hit($hits, $P, 'earnings_score', 'earnings', '決算スコア ' . ($v > 0 ? '+' : '') . $v, $pt);
+            wp_stocks_nws_hit($hits, $P, 'earnings_score', 'earnings_score', '決算スコア ' . ($v > 0 ? '+' : '') . $v, $pt);
             // 同じ行の配当予想の修正
             if (preg_match('/配当予想:修正\(([0-9.]+)円→([0-9.]+)円\)/u', $t, $d)) {
                 if ((float)$d[2] > (float)$d[1]) wp_stocks_nws_hit($hits, $P, 'div_up', 'dividend', '配当予想の増額 ' . $d[1] . '→' . $d[2] . '円');
@@ -662,7 +701,7 @@ function wp_stocks_nws_decay($bdays, $type = '') {
 function wp_stocks_nws_score_rows(array $rows, $today_ymd = null) {
     $cap = (float)wp_stocks_nws_setting('total_cap', 6);
     $items = [];
-    $best = []; // group => index of items
+    $best = []; // 分類|符号 => index of items
     foreach ($rows as $r) {
         $r = (array)$r;
         $bd = wp_stocks_nws_bdays_since($r['event_date'], $today_ymd);
@@ -677,9 +716,9 @@ function wp_stocks_nws_score_rows(array $rows, $today_ymd = null) {
         if ($w <= 0.0) continue;
         $g = $r['event_group'];
         if (strpos($g, 'manual_') === 0) { $items[$i]['counted'] = true; continue; } // 手動は全件加算
-        $cur = isset($best[$g]) ? $items[$best[$g]]['eff'] : null;
-        // 同じ強さなら悪いほう（マイナス）を採用して控えめに見る
-        if ($cur === null || abs($eff) > abs($cur) || (abs($eff) == abs($cur) && $eff < $cur)) $best[$g] = $i;
+        // 同じ分類の中で、プラスの最強1件とマイナスの最強1件を数える（同方向の重複は1件、上方と下方が混在すれば相殺）
+        $k = $g . ($eff < 0 ? '|-' : '|+');
+        if (!isset($best[$k]) || abs($eff) > abs($items[$best[$k]]['eff'])) $best[$k] = $i;
     }
     foreach ($best as $i) $items[$i]['counted'] = true;
     $sum = 0.0;
