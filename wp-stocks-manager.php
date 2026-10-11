@@ -34,6 +34,7 @@ require_once WP_STOCKS_PLUGIN_DIR . 'includes/tdnet-earnings.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/yahoo-scraping.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/index-quotes.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/index-history.php';
+require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/index-history-fetch.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/technicals.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/scoring.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/db.php';

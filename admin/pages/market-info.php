@@ -440,6 +440,7 @@ function wp_stocks_market_info_page() {
         }
     } elseif ($active_tab === 'index') {
         wp_stocks_render_market_indices();
+        wp_stocks_render_index_history_panel();
     } elseif ($active_tab === 'heatmap') {
         wp_stocks_sector_page(true, admin_url('admin.php?page=wp-stocks-market&mtab=heatmap'));
     } elseif ($active_tab === 'tcnews') {
