@@ -362,7 +362,7 @@ function wp_stocks_tde_render_revisions($stock_id, $standalone = false) {
     if ($code === '') return;
     $since = (new DateTime('now', new DateTimeZone('Asia/Tokyo')))->modify('-180 days')->format('Y-m-d H:i:s');
     $rows = $wpdb->get_results($wpdb->prepare(
-        "SELECT news_at, headline, body FROM " . wp_stocks_nws_history_table() . " WHERE code = %s AND news_at >= %s AND LOCATE('予想', headline) > 0 AND LOCATE('修正', headline) > 0 ORDER BY news_at DESC LIMIT 5",
+        "SELECT news_at, headline, body FROM " . wp_stocks_nws_history_table() . " WHERE code = %s AND news_at >= %s AND LOCATE('修正', headline) > 0 AND LOCATE('訂正', headline) = 0 ORDER BY news_at DESC LIMIT 8",
         $code, $since));
     if (!$rows) return;
     if ($standalone) echo '<div style="background:#fff;border:1px solid #ddd;border-left:4px solid #0073aa;border-radius:6px;padding:12px 16px;margin-bottom:18px;max-width:900px;">';
