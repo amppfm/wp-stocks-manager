@@ -1638,7 +1638,7 @@ function wp_stocks_company_page() {
                 <tbody>
                 <?php foreach ($financials as $f): ?>
                 <tr>
-                    <td><?php echo esc_html($f->fiscal_year . '年度'); ?></td>
+                    <td><?php echo esc_html($f->fiscal_year . '年度'); if (($f->source ?? '') === 'tdnet' && function_exists('wp_stocks_tde_badge')) echo wp_stocks_tde_badge(); ?></td>
                     <td><?php echo $f->revenue ? number_format($f->revenue / 1000000) : '-'; ?></td>
                     <td><?php echo $f->operating_profit ? number_format($f->operating_profit / 1000000) : '-'; ?></td>
                     <td><?php echo $f->net_income ? number_format($f->net_income / 1000000) : '-'; ?></td>
@@ -1657,6 +1657,7 @@ function wp_stocks_company_page() {
                 <?php endforeach; ?>
                 </tbody>
             </table>
+            <?php if (function_exists('wp_stocks_tde_source_note')) echo wp_stocks_tde_source_note((array)$financials, false); ?>
         </div>
 
         <script>
@@ -1851,6 +1852,7 @@ function wp_stocks_company_page() {
         // J-Quantsにまだ無い期だけ、決算短信（TDnet）の値で補う
         if (function_exists('wp_stocks_tde_merge_rows')) $jq_qf = wp_stocks_tde_merge_rows((array)$jq_qf);
         echo '<p style="color:#888;font-size:12px;margin-bottom:15px;">J-Quants由来のデータです（J-Quantsにまだ無い直近の期は、立花ニュースの決算短信で補います）。各値は決算短信の慣行に従い「期首からの累計値」です（通常は週次Cronで自動取得されます。手動更新は上部「年間」セクションの統合ボタンから行えます）。</p>';
+        if (function_exists('wp_stocks_tde_source_note')) echo wp_stocks_tde_source_note((array)$jq_qf, true);
 
         if (empty($jq_qf)) {
             echo '<p style="color:#888;">四半期データがまだ取得されていません。上部の統合ボタンから取得するか、週次Cronの実行をお待ちください。</p>';

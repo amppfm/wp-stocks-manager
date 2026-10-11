@@ -304,6 +304,25 @@ function wp_stocks_tde_merge_rows(array $rows) {
     return $out;
 }
 
+// たちばな由来（TDnet）の行を示す小さなタグ
+function wp_stocks_tde_badge() {
+    return '<span title="立花証券ニュースの決算短信から補った値です（J-Quantsに反映されると自動でJ-Quantsの値に切り替わります）" style="display:inline-block;margin-left:6px;padding:0 6px;border-radius:8px;background:#d35400;color:#fff;font-size:10px;font-weight:bold;vertical-align:middle;">たちばな</span>';
+}
+
+// 財務タブ用: たちばな由来の期の一覧（なければ空文字）。$quarterly=trueなら四半期の名前で表示
+function wp_stocks_tde_source_note(array $rows, $quarterly = false) {
+    $names = [];
+    $qn = [1 => '1Q', 2 => '2Q累計', 3 => '3Q累計', 4 => '通期'];
+    foreach ($rows as $r) {
+        if (($r->source ?? '') !== 'tdnet') continue;
+        $names[] = $r->fiscal_year . '年度' . ($quarterly ? ' ' . ($qn[(int)$r->fiscal_quarter] ?? '') : '');
+    }
+    if (!$names) return '';
+    return '<p style="margin:6px 0 12px;font-size:12px;color:#555;">' . wp_stocks_tde_badge()
+        . ' 立花証券の決算短信から補った期: ' . esc_html(implode('、', $names))
+        . '（J-Quantsに反映されると、自動でJ-Quantsの値に切り替わります）</p>';
+}
+
 function wp_stocks_tde_fmt_pct($v) {
     if ($v === null) return '<span style="color:#aaa;">-</span>';
     $v = (float)$v;
@@ -320,7 +339,7 @@ function wp_stocks_tde_render_panel($stock_id) {
     if (!$r) return;
     $labels = ['revenue' => '売上高', 'op' => '営業利益', 'ord' => '経常利益', 'ni' => '純利益'];
     echo '<div style="background:#fff;border:1px solid #ddd;border-left:4px solid #0073aa;border-radius:6px;padding:12px 16px;margin-bottom:18px;max-width:900px;">';
-    echo '<h3 style="margin:0 0 6px;font-size:14px;">&#x1F4C4; 最新の決算短信（TDnet）' . ($r->score !== null ? ' 決算スコア ' . esc_html(($r->score > 0 ? '+' : '') . $r->score) : '') . '</h3>';
+    echo '<h3 style="margin:0 0 6px;font-size:14px;">&#x1F4C4; 最新の決算短信（TDnet）' . wp_stocks_tde_badge() . ($r->score !== null ? ' 決算スコア ' . esc_html(($r->score > 0 ? '+' : '') . $r->score) : '') . '</h3>';
     echo '<p class="description" style="margin:0 0 8px;">' . esc_html($r->doc_title) . ($r->disclosed_at ? '（' . esc_html(substr($r->disclosed_at, 0, 16)) . ' 開示）' : '') . '</p>';
     echo '<table class="widefat striped" style="font-size:12px;"><thead><tr><th>通期予想' . ($r->fy_end ? '（' . esc_html($r->fy_end) . '期）' : '') . '</th><th style="text-align:right;">金額(百万円)</th><th style="text-align:right;">前期比</th><th style="text-align:right;">会社予想比</th><th style="text-align:right;">QUICKコンセンサス比</th></tr></thead><tbody>';
     foreach ($labels as $k => $l) {
