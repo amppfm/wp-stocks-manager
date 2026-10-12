@@ -14,7 +14,19 @@
 
 if (!defined('ABSPATH')) exit;
 
-const WP_STOCKS_JH_VERSION = '1';
+const WP_STOCKS_JH_VERSION = '2';
+
+// v2で追加した列（判定の材料の生の値。judgment-factors.php が計算する）
+function wp_stocks_jh_factor_columns() {
+    return [
+        'sur_ni_cons' => 'FLOAT DEFAULT NULL', 'sur_op_cons' => 'FLOAT DEFAULT NULL', 'sur_date' => 'DATE DEFAULT NULL',
+        'eps_rev_30d' => 'FLOAT DEFAULT NULL', 'eps_rev_90d' => 'FLOAT DEFAULT NULL',
+        'days_to_earn' => 'INT DEFAULT NULL',
+        'pos_52w' => 'FLOAT DEFAULT NULL', 'dist_high_pct' => 'FLOAT DEFAULT NULL',
+        'obv_chg20' => 'FLOAT DEFAULT NULL', 'mfi14' => 'FLOAT DEFAULT NULL', 'vol_ratio' => 'FLOAT DEFAULT NULL',
+        'atr_pct' => 'FLOAT DEFAULT NULL',
+    ];
+}
 
 function wp_stocks_jh_table() {
     global $wpdb;
@@ -50,6 +62,12 @@ function wp_stocks_jh_ensure_tables() {
   total_label VARCHAR(20) DEFAULT NULL,
   weights_ver VARCHAR(16) DEFAULT NULL,
   price FLOAT DEFAULT NULL,
+  sur_ni_cons FLOAT DEFAULT NULL, sur_op_cons FLOAT DEFAULT NULL, sur_date DATE DEFAULT NULL,
+  eps_rev_30d FLOAT DEFAULT NULL, eps_rev_90d FLOAT DEFAULT NULL,
+  days_to_earn INT DEFAULT NULL,
+  pos_52w FLOAT DEFAULT NULL, dist_high_pct FLOAT DEFAULT NULL,
+  obv_chg20 FLOAT DEFAULT NULL, mfi14 FLOAT DEFAULT NULL, vol_ratio FLOAT DEFAULT NULL,
+  atr_pct FLOAT DEFAULT NULL,
   ret_5d FLOAT DEFAULT NULL,
   ret_20d FLOAT DEFAULT NULL,
   ret_60d FLOAT DEFAULT NULL,
@@ -76,6 +94,11 @@ function wp_stocks_jh_ensure_tables() {
 ) {$charset};");
     if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $t)) !== $t) return false;
     if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $m)) !== $m) return false;
+    // 既存テーブルへ、足りない列を追加（v1 → v2）
+    $have = $wpdb->get_col("DESCRIBE {$t}", 0);
+    foreach (wp_stocks_jh_factor_columns() as $col => $def) {
+        if (!in_array($col, $have, true)) $wpdb->query("ALTER TABLE {$t} ADD COLUMN {$col} {$def}");
+    }
     update_option('wp_stocks_jh_db_version', WP_STOCKS_JH_VERSION);
     return true;
 }
@@ -144,6 +167,8 @@ function wp_stocks_jh_record_stock($stock, $date = null) {
         'news_score' => $news_score, 'news_detail' => $news_detail,
         'sector_code' => $sector_code, 'price' => $price, 'updated_at' => $now,
     ];
+    // 判定の材料（決算サプライズ、EPS修正、決算接近、52週の位置、資金流入、値動きの大きさ）
+    if (function_exists('wp_stocks_jf_collect')) $row = array_merge($row, wp_stocks_jf_collect($stock));
     $t = wp_stocks_jh_table();
     $id = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$t} WHERE stock_id = %d AND judgment_date = %s", $stock->id, $date));
     if ($id) {
@@ -387,5 +412,29 @@ function wp_stocks_jh_render_tab($stock) {
             . '<td style="text-align:right;">' . $ret($r->ret_5d) . '</td><td style="text-align:right;">' . $ret($r->ret_20d) . '</td><td style="text-align:right;">' . $ret($r->ret_60d) . '</td></tr>';
     }
     echo '</tbody></table></div>';
+
+    // 判定の材料（生の値）
+    echo '<h4 style="margin:18px 0 6px;">判定の材料（生の値）</h4>';
+    echo '<div style="overflow-x:auto;"><table class="widefat striped" style="font-size:12px;min-width:860px;"><thead><tr>'
+        . '<th>日付</th><th style="text-align:right;">純利益のコンセンサス比</th><th style="text-align:right;">営業利益のコンセンサス比</th><th>決算日</th>'
+        . '<th style="text-align:right;">予想EPS 30日</th><th style="text-align:right;">予想EPS 90日</th><th style="text-align:right;">決算まで</th>'
+        . '<th style="text-align:right;">52週の位置</th><th style="text-align:right;">高値から</th><th style="text-align:right;">OBV 20日</th><th style="text-align:right;">MFI</th><th style="text-align:right;">出来高比</th><th style="text-align:right;">ATR%</th></tr></thead><tbody>';
+    foreach ($rows as $r) {
+        echo '<tr><td>' . esc_html($r->judgment_date) . '</td>'
+            . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->sur_ni_cons ?? null, 1, true) . '</td>'
+            . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->sur_op_cons ?? null, 1, true) . '</td>'
+            . '<td>' . (!empty($r->sur_date) ? esc_html($r->sur_date) : '<span style="color:#ccc;">-</span>') . '</td>'
+            . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->eps_rev_30d ?? null, 1, true) . '</td>'
+            . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->eps_rev_90d ?? null, 1, true) . '</td>'
+            . '<td style="text-align:right;">' . (($r->days_to_earn ?? null) !== null ? esc_html($r->days_to_earn) . '日' : '<span style="color:#ccc;">-</span>') . '</td>'
+            . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->pos_52w ?? null, 0) . '</td>'
+            . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->dist_high_pct ?? null, 1, true) . '</td>'
+            . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->obv_chg20 ?? null, 2, true) . '</td>'
+            . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->mfi14 ?? null, 0) . '</td>'
+            . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->vol_ratio ?? null, 2) . '</td>'
+            . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->atr_pct ?? null, 2) . '</td></tr>';
+    }
+    echo '</tbody></table></div>';
+    echo '<p class="description" style="margin-top:6px;">コンセンサス比は、最新の決算短信のQUICKコンセンサスとの差（%）です。52週の位置は、0が安値・100が高値です。OBV 20日は、直近20日の出来高に対する資金の流れ（-1〜+1）です。点数にはまだ反映していません。</p>';
     echo '<p class="description" style="margin-top:6px;">5・20・60日後の騰落率は、日が経ってから自動で入ります。最新120日分を表示しています。</p>';
 }

@@ -31,6 +31,7 @@ require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/jpx.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/tachibana.php';
 require_once plugin_dir_path(__FILE__) . 'includes/news-scoring.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/tdnet-earnings.php';
+require_once WP_STOCKS_PLUGIN_DIR . 'includes/judgment-factors.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/judgment-history.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/yahoo-scraping.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/index-quotes.php';
