@@ -44,3 +44,109 @@ function wp_stocks_theme_reference_symbols() {
     }
     return $list;
 }
+
+// --------------------------------------------------
+// テーマの定義：基準にする系列（履歴にあるシンボル）と、株探テーマタグと照合するキーワード
+// キーワードは stocks.theme_tags（株探から取得したテーマ。カンマ区切り）の各タグに部分一致で照合する。
+// ※キーワードは、実際の株探タグ名（stocks.theme_tags の集計）に合わせて設定。下の「テーマ別の該当銘柄」表で拾えている銘柄を確認しながら調整する。
+// ※金利・小型新興は、株探のタグでは判定しにくいので、このテーマ定義には含めない（市場区分などで別に扱う）。
+// --------------------------------------------------
+function wp_stocks_theme_defs() {
+    return [
+        'semiconductor' => ['label' => '半導体',               'reference' => '^SOX',     'keywords' => ['半導体']],   // 半導体製造装置・半導体部材・パワー半導体も含む
+        'ai'            => ['label' => 'AI・大型ハイテク',     'reference' => '^NYFANG',  'keywords' => ['人工知能', '生成AI', 'フィジカルAI', 'データセンター', 'エヌビディア関連']],
+        'resource'      => ['label' => '資源・エネルギー',     'reference' => 'CL=F',     'keywords' => ['原油', '石油', 'LNG', 'シェールガス', 'メタンハイドレート']],
+        'weak_yen'      => ['label' => '円安メリット',         'reference' => 'USDJPY=X', 'keywords' => ['円安メリット']],
+        'defense'       => ['label' => '防衛',                 'reference' => '513A.T',   'keywords' => ['防衛']],
+        'cyber'         => ['label' => 'サイバーセキュリティ', 'reference' => 'CIBR',     'keywords' => ['サイバーセキュリティ']],
+        'renewable'     => ['label' => '再生可能エネルギー',   'reference' => 'ICLN',     'keywords' => ['再生可能エネルギー', '風力発電', '太陽光', 'メガソーラー', '地熱発電', '水素', '燃料電池']],
+        'bio'           => ['label' => 'バイオ・創薬',         'reference' => 'XBI',      'keywords' => ['創薬', 'バイオ医薬', 'バイオテクノロジー', '再生医療', 'ゲノム']],   // 「バイオ」単独は「バイオエタノール」に当たるので使わない
+        'nuclear'       => ['label' => '原子力・ウラン',       'reference' => 'URA',      'keywords' => ['原子力', 'ウラン', '小型原子炉']],
+        'gold'          => ['label' => 'ゴールド',             'reference' => '1326.T',   'keywords' => ['ゴールド', '金鉱']],
+        'dividend'      => ['label' => '高配当',               'reference' => '1489.T',   'keywords' => ['好配当', '高配当']],
+    ];
+}
+
+// --------------------------------------------------
+// 銘柄が当てはまるテーマのキー一覧（テーマタグの各タグに、キーワードが部分一致すれば該当）
+// $stock: stocks テーブルの1行（theme_tags を参照）
+// --------------------------------------------------
+function wp_stocks_get_stock_themes($stock) {
+    $raw = trim((string) ($stock->theme_tags ?? ''));
+    if ($raw === '') return [];
+
+    $tags = [];
+    foreach (preg_split('/[,、，]/u', $raw) as $t) {
+        $t = trim($t);
+        if ($t !== '') $tags[] = mb_strtolower($t);
+    }
+
+    $hit = [];
+    foreach (wp_stocks_theme_defs() as $key => $def) {
+        foreach ($def['keywords'] as $kw) {
+            $kw = mb_strtolower($kw);
+            foreach ($tags as $tag) {
+                if (mb_strpos($tag, $kw) !== false) { $hit[] = $key; continue 3; }
+            }
+        }
+    }
+    return $hit;
+}
+
+// --------------------------------------------------
+// マーケット情報「指数」タブ：テーマ別の該当銘柄（キーワード調整用の確認表を兼ねる）
+// --------------------------------------------------
+function wp_stocks_render_theme_stock_panel() {
+    global $wpdb;
+    $stocks = $wpdb->get_results(
+        "SELECT id, code, name, theme_tags FROM {$wpdb->prefix}stocks
+         WHERE status IN ('watch','portfolio') AND is_sector_etf = 0 AND theme_tags IS NOT NULL AND theme_tags <> ''
+         ORDER BY code ASC"
+    );
+
+    $by_theme = [];
+    foreach ((array) $stocks as $s) {
+        foreach (wp_stocks_get_stock_themes($s) as $key) {
+            $by_theme[$key][] = $s;
+        }
+    }
+
+    $labels = function_exists('wp_stocks_index_history_symbols') ? wp_stocks_index_history_symbols() : [];
+    $fmt = function ($pct) {
+        if ($pct === null) return '<span style="color:#ccc;">-</span>';
+        $c = $pct >= 0 ? '#e74c3c' : '#3498db';
+        return '<span style="color:' . $c . ';font-weight:bold;">' . ($pct >= 0 ? '+' : '') . number_format($pct, 2) . '%</span>';
+    };
+
+    echo '<div style="margin-top:35px;">';
+    echo '<h3>&#x1F3F7;&#xFE0F; テーマ別の該当銘柄</h3>';
+    echo '<p style="color:#666;font-size:13px;">テーマタグ（株探から取得）に、各テーマのキーワードが含まれる銘柄です（対象：ウォッチ・保有でタグのある ' . count((array) $stocks) . ' 銘柄）。'
+        . '拾えていない・余計に拾っている場合は、キーワード（market-themes.php の wp_stocks_theme_defs）を調整します。</p>';
+
+    echo '<div style="overflow-x:auto;"><table style="border-collapse:collapse;background:#fff;border:1px solid #ddd;min-width:760px;"><thead><tr style="background:#f8f9fa;">'
+        . '<th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd;">テーマ</th>'
+        . '<th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd;">基準の系列</th>'
+        . '<th style="padding:8px 12px;text-align:right;border-bottom:2px solid #ddd;">1ヶ月</th>'
+        . '<th style="padding:8px 12px;text-align:right;border-bottom:2px solid #ddd;">6ヶ月</th>'
+        . '<th style="padding:8px 12px;text-align:right;border-bottom:2px solid #ddd;">該当</th>'
+        . '<th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd;">銘柄（先頭15件）</th>'
+        . '</tr></thead><tbody>';
+
+    foreach (wp_stocks_theme_defs() as $key => $def) {
+        $list = $by_theme[$key] ?? [];
+        $ret  = function_exists('wp_stocks_index_period_returns') ? wp_stocks_index_period_returns($def['reference'])['returns'] : [];
+        $names = [];
+        foreach (array_slice($list, 0, 15) as $s) $names[] = esc_html($s->name) . '(' . esc_html($s->code) . ')';
+
+        echo '<tr>'
+            . '<td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:bold;">' . esc_html($def['label'])
+            . '<div style="font-weight:normal;font-size:11px;color:#999;">' . esc_html(implode(' / ', $def['keywords'])) . '</div></td>'
+            . '<td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:12px;">' . esc_html($labels[$def['reference']] ?? $def['reference']) . '</td>'
+            . '<td style="padding:8px 12px;text-align:right;border-bottom:1px solid #eee;">' . $fmt($ret['1ヶ月'] ?? null) . '</td>'
+            . '<td style="padding:8px 12px;text-align:right;border-bottom:1px solid #eee;">' . $fmt($ret['6ヶ月'] ?? null) . '</td>'
+            . '<td style="padding:8px 12px;text-align:right;border-bottom:1px solid #eee;font-weight:bold;">' . count($list) . '</td>'
+            . '<td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:12px;color:#555;">' . ($names ? implode('、', $names) . (count($list) > 15 ? ' ほか' : '') : '<span style="color:#ccc;">-</span>') . '</td>'
+            . '</tr>';
+    }
+    echo '</tbody></table></div></div>';
+}

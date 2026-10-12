@@ -442,6 +442,7 @@ function wp_stocks_market_info_page() {
         wp_stocks_render_market_indices();
         wp_stocks_render_index_period_table();
         wp_stocks_render_index_period_table(wp_stocks_theme_reference_groups(), '&#x1F3AF; テーマ・基準指数の期間別騰落率');
+        wp_stocks_render_theme_stock_panel();
         wp_stocks_render_index_history_panel();
     } elseif ($active_tab === 'heatmap') {
         wp_stocks_sector_page(true, admin_url('admin.php?page=wp-stocks-market&mtab=heatmap'));
