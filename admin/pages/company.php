@@ -212,13 +212,14 @@ function wp_stocks_company_page() {
 
     // ===================== タブUI =====================
     $active_tab = sanitize_text_field($_GET['ctab'] ?? 'info');
-    if (!in_array($active_tab, ['info','shikiho','chart','finance','oscillator','news','ai','edit'])) $active_tab = 'info';
+    if (!in_array($active_tab, ['info','shikiho','chart','finance','oscillator','history','news','ai','edit'])) $active_tab = 'info';
     $tab_defs = [
         'info'       => '&#x1F4CB; 基本情報',
         'shikiho'    => '&#x1F4D6; 四季報',
         'chart'      => '&#x1F4CA; チャート',
         'finance'    => '&#x1F4B0; 財務',
         'oscillator' => '&#x1F4C8; テクニカル分析', // ★変更：「オシレータ分析」から改称（内部のctabキーはoscillatorのまま）
+        'history'    => '&#x1F4C8; 判定履歴',
         'news'       => '&#x1F4F0; 適時開示',
         'ai'         => '&#x1F916; AI分析',
         'edit'       => '&#x270F;&#xFE0F; 編集',
@@ -2181,6 +2182,13 @@ function wp_stocks_company_page() {
     } // end finance tab
 
     // ===== 適時開示タブ =====
+    // ===== 判定履歴タブ（総合判定の材料を日次で記録したもの） =====
+    if ($active_tab === 'history') {
+        echo '<div id="tab-history">';
+        if (function_exists('wp_stocks_jh_render_tab')) wp_stocks_jh_render_tab($stock);
+        echo '</div>';
+    }
+
     if ($active_tab === 'news') {
     echo '<div id="tab-news">';
 
