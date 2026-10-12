@@ -507,13 +507,13 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
             echo '</table></div>';
         }
     } elseif ($tab === 'period') {
-        // TOPIX-17業種別 期間別騰落率（1日/5日/1ヶ月/2ヶ月/1年）。データ不足の期間は「-」表示
+        // TOPIX-17業種別 期間別騰落率（1日/5日/1ヶ月/2ヶ月/6ヶ月/1年）。データ不足の期間は「-」表示
         $etf_history = wp_stocks_get_etf_price_history($etf_stocks, 400);
         if (empty($etf_stocks)) {
             echo '<p style="color:#888;padding:20px;">データがありません。</p>';
         } else {
             $topix17_map = wp_stocks_get_topix17_sector_map();
-            $periods = ['1日' => 1, '5日' => 5, '1ヶ月' => 21, '2ヶ月' => 42, '6ヶ月' => 126];
+            $periods = ['1日' => 1, '5日' => 5, '1ヶ月' => 21, '2ヶ月' => 42, '6ヶ月' => 126, '1年' => 252];
 
             echo '<div style="overflow-x:auto;">';
             echo '<table style="border-collapse:collapse;width:100%;font-size:13px;">';
