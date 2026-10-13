@@ -32,6 +32,10 @@ function wp_stocks_nws_point_defs() {
         'rev_down'        => ['下方修正（修正幅15%以上／幅不明）', -4],
         'rev_down_small'  => ['下方修正（修正幅15%未満）', -3],
         'rev_down_growth' => ['下方修正（修正後も前期比で増益予想）', -1],
+        'surprise_up_big'   => ['決算サプライズ 通期予想が市場予想を+10%以上上回る', 2],
+        'surprise_up'       => ['決算サプライズ 通期予想が市場予想を+5〜10%上回る', 1],
+        'surprise_down'     => ['決算サプライズ 通期予想が市場予想を5〜10%下回る', -1],
+        'surprise_down_big' => ['決算サプライズ 通期予想が市場予想を10%以上下回る', -2],
         'turn_black'      => ['営業利益 黒字転換', 3],
         'turn_red'        => ['営業利益 赤字転落', -3],
         'red_shrink'      => ['営業損失 赤字縮小', 1],
@@ -342,6 +346,50 @@ function wp_stocks_nws_soften_revision(array $c, $news_at) {
             'reason' => $h['reason'] . sprintf('・増益予想は維持（前期比+%.1f%%）', $yoy)];
     }
     return $c;
+}
+
+// TDnet AI の本文（予想期の欄）から、項目ごとの 前期比・会社予想比・QUICKコンセンサス比 を取る
+function wp_stocks_nws_ai_forecast_metrics($body) {
+    $t = mb_convert_kana((string)$body, 'as', 'UTF-8');
+    $t = str_replace(['−', '▲', '△'], '-', $t);
+    $pos = mb_strpos($t, '予想期');
+    if ($pos === false) return [];
+    $t = mb_substr($t, $pos);
+    $out = []; $cur = '';
+    foreach (preg_split('/\r\n|\r|\n/', $t) as $ln) {
+        $ln = trim($ln);
+        if (preg_match('/^(売上高|営業利益|経常利益|税引前利益|純利益)\(百万円\)/u', $ln, $m)) { $cur = $m[1]; continue; }
+        if ($cur !== '' && preg_match('/^(前期比|会社予想比|QUICKコンセンサス比)\s+([+\-]?[0-9.]+)%/u', $ln, $m)) {
+            $k = ['前期比' => 'yoy', '会社予想比' => 'vs_co', 'QUICKコンセンサス比' => 'vs_cons'][$m[1]];
+            if (!isset($out[$cur][$k])) $out[$cur][$k] = (float)$m[2];
+        }
+    }
+    return $out;
+}
+
+// 決算発表の行（TDnet AI）：通期予想が市場予想（QUICKコンセンサス）より上か下かを加減点にする。
+// 営業利益と純利益のコンセンサス比の平均で、±5%・±10%を境にする。業績修正の行は修正の点があるので対象外。
+function wp_stocks_nws_surprise_hits($row) {
+    $h = mb_convert_kana((string)$row->headline, 'as', 'UTF-8');
+    if (strpos($h, '<TDnet>AI:') !== 0 || strpos($h, '決算発表') === false) return null;
+    $p = wp_stocks_nws_parse_headline($row->headline, $row->issues);
+    if (!$p) return null;
+    $sources = wp_stocks_nws_sources();
+    if (empty($sources[$p['tag']])) return null;
+    $m = wp_stocks_nws_ai_forecast_metrics($row->body);
+    $vals = [];
+    foreach (['営業利益', '純利益'] as $k) if (isset($m[$k]['vs_cons'])) $vals[] = $m[$k]['vs_cons'];
+    if (!$vals) return null;
+    $avg = array_sum($vals) / count($vals);
+    $P = wp_stocks_nws_points();
+    $hits = [];
+    if     ($avg >= 10)  $key = 'surprise_up_big';
+    elseif ($avg >= 5)   $key = 'surprise_up';
+    elseif ($avg <= -10) $key = 'surprise_down_big';
+    elseif ($avg <= -5)  $key = 'surprise_down';
+    else return null;
+    wp_stocks_nws_hit($hits, $P, $key, 'earnings_surprise', sprintf('通期予想が市場予想を%+.1f%%（営業利益・純利益の平均）', $avg));
+    return $hits ? ['code' => $p['code'], 'tag' => $p['tag'], 'hits' => $hits] : null;
 }
 
 // 1本分のテキストを判定（銘柄コードは呼び出し側で決定済み）
@@ -681,6 +729,8 @@ function wp_stocks_nws_classify_recent($full = false) {
             $c = wp_stocks_nws_classify($r->headline, $r->issues, $sources);
             $results = ($c && $c['hits']) ? [$c] : [];
         }
+        $sur = wp_stocks_nws_surprise_hits($r);
+        if ($sur) $results[] = $sur;
         foreach ($results as $c) { $c = wp_stocks_nws_soften_revision($c, $r->news_at); foreach ($c['hits'] as $h) {
             $ok = $wpdb->query($wpdb->prepare(
                 "INSERT INTO {$ev_t} (news_id, code, event_at, event_date, event_type, event_group, points, reason, headline, source, created_at)
@@ -743,7 +793,7 @@ function wp_stocks_nws_bdays_since($date_ymd, $today_ymd = null) {
 // 0〜3営業日 100% / 4〜7日 70% / 8〜14日 40% / 15日以降 0%
 // 発表直後に効くもの（決算・修正・配当）は短く: 0〜3営業日100%→4日75%→5日50%→6日25%→7日以降0
 function wp_stocks_nws_is_short_type($type) {
-    return (bool)preg_match('/^(earnings_score|rev_|turn_|red_|op_|div_)/', (string)$type);
+    return (bool)preg_match('/^(earnings_score|rev_|turn_|red_|op_|div_|surprise_)/', (string)$type);
 }
 
 function wp_stocks_nws_decay($bdays, $type = '') {
