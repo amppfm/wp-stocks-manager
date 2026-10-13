@@ -392,6 +392,48 @@ function wp_stocks_nws_surprise_hits($row) {
     return $hits ? ['code' => $p['code'], 'tag' => $p['tag'], 'hits' => $hits] : null;
 }
 
+// その日・その銘柄の決算スコア（TDnet AI「決算発表」の見出しから）。なければnull。キャッシュあり
+function wp_stocks_nws_day_earnings_score($code, $date) {
+    global $wpdb;
+    static $cache = [];
+    $k = $code . '|' . $date;
+    if (array_key_exists($k, $cache)) return $cache[$k];
+    $news_t = $wpdb->prefix . 'stock_tachibana_news';
+    $rows = $wpdb->get_col($wpdb->prepare(
+        "SELECT headline FROM {$news_t} WHERE news_date = %s AND LOCATE(%s, issues) > 0 AND LOCATE('<TDnet>AI:', headline) = 1 AND LOCATE('決算発表', headline) > 0",
+        $date, '|' . $code . '|'));
+    $v = null;
+    foreach ((array)$rows as $h) {
+        $h = mb_convert_kana((string)$h, 'as', 'UTF-8');
+        if (preg_match('/決算スコア:\s*([+\-−▲]?)([0-9]+(?:\.[0-9]+)?)/u', $h, $m)) {
+            $v = (float)$m[2];
+            if (in_array($m[1], ['-', '−', '▲'], true)) $v = -$v;
+            break;
+        }
+    }
+    return $cache[$k] = $v;
+}
+
+// 営業利益の増減率の点は、決算スコア（市場予想との比較を含む）が弱いか逆向きなら半分にする。
+//   増益の点：決算スコアが +2未満（弱い・マイナス）→ 半分。減益の点：決算スコアが -2より大きい（弱い・プラス）→ 半分
+function wp_stocks_nws_damp_growth(array $c, $news_at) {
+    if (empty($c['hits']) || empty($c['code'])) return $c;
+    $th   = (float)wp_stocks_nws_setting('op_damp_th', 2);
+    $mult = (float)wp_stocks_nws_setting('op_damp_mult', 0.5);
+    foreach ($c['hits'] as $i => $h) {
+        $up   = in_array($h['type'], ['op_up_big', 'op_up'], true);
+        $down = in_array($h['type'], ['op_down_big', 'op_down'], true);
+        if (!$up && !$down) continue;
+        $sc = wp_stocks_nws_day_earnings_score($c['code'], substr($news_at, 0, 10));
+        if ($sc === null) continue;
+        if (($up && $sc < $th) || ($down && $sc > -$th)) {
+            $c['hits'][$i]['points'] = round($h['points'] * $mult * 2) / 2;
+            $c['hits'][$i]['reason'] = $h['reason'] . sprintf('・決算スコア%+.2fが弱いため×%s', $sc, rtrim(rtrim(number_format($mult, 2), '0'), '.'));
+        }
+    }
+    return $c;
+}
+
 // 1本分のテキストを判定（銘柄コードは呼び出し側で決定済み）
 function wp_stocks_nws_classify_core($tag, $t, $code, $sources = null) {
     $P = wp_stocks_nws_points();
@@ -731,7 +773,7 @@ function wp_stocks_nws_classify_recent($full = false) {
         }
         $sur = wp_stocks_nws_surprise_hits($r);
         if ($sur) $results[] = $sur;
-        foreach ($results as $c) { $c = wp_stocks_nws_soften_revision($c, $r->news_at); foreach ($c['hits'] as $h) {
+        foreach ($results as $c) { $c = wp_stocks_nws_soften_revision($c, $r->news_at); $c = wp_stocks_nws_damp_growth($c, $r->news_at); foreach ($c['hits'] as $h) {
             $ok = $wpdb->query($wpdb->prepare(
                 "INSERT INTO {$ev_t} (news_id, code, event_at, event_date, event_type, event_group, points, reason, headline, source, created_at)
                  VALUES (%s, %s, %s, %s, %s, %s, %f, %s, %s, 'auto', %s)
