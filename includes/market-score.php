@@ -24,6 +24,11 @@ function wp_stocks_ms_sector_scale() {
 }
 
 // 相場スコア（参考）の合成：業種と地合いの重み、テーマの加点の大きさ
+// テーマの平均で、1つのテーマに数えるタグの数の上限（広いタグが数で押し切らないように）
+function wp_stocks_ms_theme_count_cap() {
+    return 2;
+}
+
 function wp_stocks_ms_blend() {
     return ['sector' => 0.5, 'regime' => 0.5, 'theme' => 0.15];   // theme=テーマを混ぜる割合（残りが業種と地合い）
 }
@@ -290,14 +295,15 @@ function wp_stocks_market_score($stock) {
     $sector = wp_stocks_ms_sector_part($stock);
     $regime = wp_stocks_ms_regime(($stock->currency ?? 'JPY') === 'USD');
 
-    // テーマ：一致したタグの数で重みづけした平均（関連の薄い1タグだけのテーマは軽くなる）
+    // テーマ：一致したタグの数（上限あり）で重みづけした平均（関連の薄い1タグだけのテーマは軽くなる）
     $defs = wp_stocks_theme_defs();
     $tsum = 0; $tw = 0; $names = [];
     foreach (wp_stocks_get_stock_theme_hits($stock) as $key => $cnt) {
         $sig = wp_stocks_ms_theme_signal($key);
         if ($sig === null) continue;
-        $tsum += $sig * $cnt;
-        $tw   += $cnt;
+        $wt    = min($cnt, wp_stocks_ms_theme_count_cap());   // 重みには上限を掛ける（表示の×nは実際に当たった数のまま）
+        $tsum += $sig * $wt;
+        $tw   += $wt;
         $names[] = $defs[$key]['label'] . ($cnt > 1 ? '×' . $cnt : '');
     }
     $theme = $tw > 0 ? ['score' => $tsum / $tw, 'themes' => $names] : null;
