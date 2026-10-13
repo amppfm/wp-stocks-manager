@@ -1016,7 +1016,7 @@ function wp_stocks_nws_render_ranking($show_all = false, $compact = false) {
         if (!wp_stocks_nws_is_jp_code($code)) continue;
         $sc = $scores[$code] ?? ['total' => 0.0, 'items' => []];
         if (!$show_all && abs($sc['total']) < 0.05 && !array_filter($sc['items'], function ($i) { return $i['counted']; })) continue;
-        $list[] = ['code' => $code, 'name' => (string)($s->name ?? ''), 'status' => (string)($s->status ?? ''), 'sc' => $sc];
+        $list[] = ['id' => intval($s->id ?? 0), 'code' => $code, 'name' => (string)($s->name ?? ''), 'status' => (string)($s->status ?? ''), 'sc' => $sc];
     }
     usort($list, function ($a, $b) { return $b['sc']['total'] <=> $a['sc']['total']; });
 
@@ -1040,7 +1040,11 @@ function wp_stocks_nws_render_ranking($show_all = false, $compact = false) {
                 if (!$it['counted']) continue;
                 $reasons[] = $it['reason'] . '(' . ($it['points'] > 0 ? '+' : '') . rtrim(rtrim(number_format((float)$it['points'], 1), '0'), '.') . '×' . round($it['weight'] * 100) . '%)';
             }
-            echo '<tr><td>' . esc_html($row['code']) . '</td><td>' . esc_html($row['name']) . '</td><td>' . esc_html($row['status'] === 'portfolio' ? '保有' : 'ウォッチ') . '</td>'
+            $company_url = $row['id'] ? esc_url(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $row['id'])) : '';
+            $link = function ($text) use ($company_url) {
+                return $company_url ? '<a href="' . $company_url . '">' . esc_html($text) . '</a>' : esc_html($text);
+            };
+            echo '<tr><td>' . $link($row['code']) . '</td><td>' . $link($row['name']) . '</td><td>' . esc_html($row['status'] === 'portfolio' ? '保有' : 'ウォッチ') . '</td>'
                . '<td>' . wp_stocks_nws_badge($row['sc']['total']) . '</td><td>' . esc_html(implode(' / ', array_slice($reasons, 0, 5))) . '</td></tr>';
         }
         echo '</tbody></table>';
@@ -1065,10 +1069,16 @@ function wp_stocks_nws_render_manual($compact = false) {
 
     $manual = $wpdb->get_results("SELECT * FROM {$ev_t} WHERE source = 'manual' ORDER BY event_date DESC, id DESC LIMIT 30");
     if ($manual) {
+        $id_by_code = [];
+        foreach ((array)$wpdb->get_results("SELECT id, code FROM {$wpdb->prefix}stocks") as $sr) {
+            $id_by_code[(string)preg_replace('/\.T$/', '', (string)$sr->code)] = intval($sr->id);
+        }
         echo '<table class="widefat striped" style="max-width:900px;margin-top:8px;"><thead><tr><th>日付</th><th>コード</th><th>点数</th><th>メモ</th><th></th></tr></thead><tbody>';
         foreach ($manual as $m) {
             $del = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_nws_action&op=delete_manual&id=' . (int)$m->id), 'wp_stocks_nws_action');
-            echo '<tr><td>' . esc_html($m->event_date) . '</td><td>' . esc_html($m->code) . '</td><td>' . esc_html($m->points) . '</td><td>' . esc_html($m->headline) . '</td>'
+            $mc_id   = $id_by_code[(string)preg_replace('/\.T$/', '', (string)$m->code)] ?? 0;
+            $mc_cell = $mc_id ? '<a href="' . esc_url(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $mc_id)) . '">' . esc_html($m->code) . '</a>' : esc_html($m->code);
+            echo '<tr><td>' . esc_html($m->event_date) . '</td><td>' . $mc_cell . '</td><td>' . esc_html($m->points) . '</td><td>' . esc_html($m->headline) . '</td>'
                . '<td><a href="' . esc_url($del) . '" onclick="return confirm(\'削除しますか？\');">削除</a></td></tr>';
         }
         echo '</tbody></table>';
