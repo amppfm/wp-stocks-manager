@@ -5,8 +5,8 @@
  *
  *   業種スコア：TOPIX-17のETFの騰落率 − TOPIX連動ETF(1306.T)の騰落率（相対強度）。日本株のみ。
  *   地合い    ：TOPIX(1306.T)の25日線・75日線とVIX。良(+1)／中立(0)／悪(-1)。米国株はS&P500。
- *   テーマ    ：株探タグで該当するテーマの基準系列の強さ。おまけの加点（±0.15）。
- *   相場スコア（参考）：業種と地合いを 0.5/0.5 で平均（データの無い層は除く）＋テーマの加点。
+ *   テーマ    ：株探タグで該当するテーマの基準系列の強さ。一致したタグの数で重みづけして平均する。
+ *   相場スコア（参考）：業種と地合いを 0.5/0.5 で平均（データの無い層は除く）したものを85%、テーマを15%で混ぜる。
  *
  * 総合判定では、業種と地合いを別々の層として使う。ここでの合成点は確認用の目安。
  */
@@ -25,7 +25,7 @@ function wp_stocks_ms_sector_scale() {
 
 // 相場スコア（参考）の合成：業種と地合いの重み、テーマの加点の大きさ
 function wp_stocks_ms_blend() {
-    return ['sector' => 0.5, 'regime' => 0.5, 'theme_bonus' => 0.15];
+    return ['sector' => 0.5, 'regime' => 0.5, 'theme' => 0.15];   // theme=テーマを混ぜる割合（残りが業種と地合い）
 }
 
 // --------------------------------------------------
@@ -242,20 +242,23 @@ function wp_stocks_market_score($stock) {
     $sector = wp_stocks_ms_sector_part($stock);
     $regime = wp_stocks_ms_regime(($stock->currency ?? 'JPY') === 'USD');
 
+    // テーマ：一致したタグの数で重みづけした平均（関連の薄い1タグだけのテーマは軽くなる）
     $defs = wp_stocks_theme_defs();
-    $ts = []; $names = [];
-    foreach (wp_stocks_get_stock_themes($stock) as $key) {
+    $tsum = 0; $tw = 0; $names = [];
+    foreach (wp_stocks_get_stock_theme_hits($stock) as $key => $cnt) {
         $sig = wp_stocks_ms_theme_signal($key);
-        if ($sig !== null) { $ts[] = $sig; $names[] = $defs[$key]['label']; }
+        if ($sig === null) continue;
+        $tsum += $sig * $cnt;
+        $tw   += $cnt;
+        $names[] = $defs[$key]['label'] . ($cnt > 1 ? '×' . $cnt : '');
     }
-    $theme = $ts ? ['score' => array_sum($ts) / count($ts), 'themes' => $names] : null;
+    $theme = $tw > 0 ? ['score' => $tsum / $tw, 'themes' => $names] : null;
 
     $sum = 0; $wsum = 0;
     if ($sector !== null)               { $sum += $blend['sector'] * $sector['score'];  $wsum += $blend['sector']; }
     if ($regime['level'] !== 'unknown') { $sum += $blend['regime'] * $regime['score'];  $wsum += $blend['regime']; }
     $score = $wsum > 0 ? $sum / $wsum : null;
-    if ($score !== null && $theme !== null) $score += $blend['theme_bonus'] * $theme['score'];
-    if ($score !== null) $score = max(-1, min(1, $score));
+    if ($score !== null && $theme !== null) $score = (1 - $blend['theme']) * $score + $blend['theme'] * $theme['score'];   // 混ぜ合わせなので頭打ちは起きない
 
     return ['score' => $score, 'sector' => $sector, 'regime' => $regime, 'theme' => $theme];
 }
@@ -300,7 +303,7 @@ function wp_stocks_render_market_score_panel() {
         . $regime_line('地合い（米国株）', wp_stocks_ms_regime(true)) . '</div>';
     echo '<p style="color:#666;font-size:13px;">業種＝業種ETFの騰落率 − TOPIX連動ETFの騰落率（ポイント差を±1に換算、1ヶ月0.3・2ヶ月0.3・6ヶ月0.4）。日本株のみ。'
         . ' 地合い＝TOPIX（米国株はS&amp;P500）の25日線・75日線とVIXで 良＋1／中立0／悪−1。'
-        . ' 相場スコア（参考）＝業種と地合いを0.5ずつで平均し、テーマ（株探タグ）の強さを±0.15まで加点。</p>';
+        . ' 相場スコア（参考）＝業種と地合いを0.5ずつで平均したものを85%、テーマ（株探タグ。一致したタグの数で重みづけ）を15%で混ぜた値。</p>';
 
     echo '<div style="max-height:640px;overflow:auto;border:1px solid #ddd;"><table style="border-collapse:collapse;background:#fff;min-width:980px;width:100%;font-size:13px;"><thead><tr style="background:#f8f9fa;position:sticky;top:0;">';
     foreach (['コード', '銘柄', '相場スコア（参考）', '業種（相対強度）', '地合い', 'テーマ'] as $h) {

@@ -57,7 +57,7 @@ function wp_stocks_theme_defs() {
         'ai'            => ['label' => 'AI・大型ハイテク',     'reference' => '^NYFANG',  'keywords' => ['人工知能', '生成AI', 'フィジカルAI', 'データセンター', 'エヌビディア関連']],
         'resource'      => ['label' => '資源・エネルギー',     'reference' => 'CL=F',     'keywords' => ['原油', '石油', 'LNG', 'シェールガス', 'メタンハイドレート']],
         'weak_yen'      => ['label' => '円安メリット',         'reference' => 'USDJPY=X', 'keywords' => ['円安メリット']],
-        'defense'       => ['label' => '防衛',                 'reference' => '513A.T',   'keywords' => ['防衛']],
+        'defense'       => ['label' => '防衛',                 'reference' => '513A.T',   'keywords' => ['防衛'], 'exclude' => ['生活防衛']],   // 「生活防衛」は別の意味のタグ
         'cyber'         => ['label' => 'サイバーセキュリティ', 'reference' => 'CIBR',     'keywords' => ['サイバーセキュリティ']],
         'renewable'     => ['label' => '再生可能エネルギー',   'reference' => 'ICLN',     'keywords' => ['再生可能エネルギー', '風力発電', '太陽光', 'メガソーラー', '地熱発電', '水素', '燃料電池']],
         'bio'           => ['label' => 'バイオ・創薬',         'reference' => 'XBI',      'keywords' => ['創薬', 'バイオ医薬', 'バイオテクノロジー', '再生医療', 'ゲノム']],   // 「バイオ」単独は「バイオエタノール」に当たるので使わない
@@ -68,10 +68,11 @@ function wp_stocks_theme_defs() {
 }
 
 // --------------------------------------------------
-// 銘柄が当てはまるテーマのキー一覧（テーマタグの各タグに、キーワードが部分一致すれば該当）
+// 銘柄が当てはまるテーマと、そのテーマに一致したタグの数：[テーマのキー => タグの数]
+// 各タグにキーワードが部分一致すれば該当。'exclude' に挙げた語を含むタグは対象外。
 // $stock: stocks テーブルの1行（theme_tags を参照）
 // --------------------------------------------------
-function wp_stocks_get_stock_themes($stock) {
+function wp_stocks_get_stock_theme_hits($stock) {
     $raw = trim((string) ($stock->theme_tags ?? ''));
     if ($raw === '') return [];
 
@@ -81,16 +82,27 @@ function wp_stocks_get_stock_themes($stock) {
         if ($t !== '') $tags[] = mb_strtolower($t);
     }
 
-    $hit = [];
+    $hits = [];
     foreach (wp_stocks_theme_defs() as $key => $def) {
-        foreach ($def['keywords'] as $kw) {
-            $kw = mb_strtolower($kw);
-            foreach ($tags as $tag) {
-                if (mb_strpos($tag, $kw) !== false) { $hit[] = $key; continue 3; }
+        $excl = array_map('mb_strtolower', $def['exclude'] ?? []);
+        foreach ($tags as $tag) {
+            foreach ($excl as $ex) {
+                if (mb_strpos($tag, $ex) !== false) continue 2;
+            }
+            foreach ($def['keywords'] as $kw) {
+                if (mb_strpos($tag, mb_strtolower($kw)) !== false) {
+                    $hits[$key] = ($hits[$key] ?? 0) + 1;
+                    break;
+                }
             }
         }
     }
-    return $hit;
+    return $hits;
+}
+
+// 銘柄が当てはまるテーマのキー一覧
+function wp_stocks_get_stock_themes($stock) {
+    return array_keys(wp_stocks_get_stock_theme_hits($stock));
 }
 
 // --------------------------------------------------
