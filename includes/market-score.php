@@ -1,28 +1,31 @@
 <?php
 /**
- * WP Stocks Manager — 相場スコア（セクター・指数トレンド・テーマ＋VIXによる逆風判定）
- * 2026-10-12 追加。総合判定（テクニカル・財務・ニュース・相場）の「相場」の部分。
+ * WP Stocks Manager — 相場スコア（総合判定の「業種」と「地合い」の層＋テーマのおまけ加点）
+ * 2026-10-12 追加／2026-10-13 5層構成に合わせて作り直し。
  *
- * 相場スコア = セクター(0.35) + 指数トレンド(0.35) + テーマ(0.30) の加重平均（-1〜+1）。
- *   - データが無い要素は除き、残りの重みを按分する（日本株のみセクター、タグのある銘柄のみテーマ）。
- *   - 逆風フラグは点数とは別に判定する（買い判定を1段階下げる用）。
- * 第1段階では、マーケット情報「指数」タブの確認用の表だけに出す。総合判定への統合は、確認してから。
+ *   業種スコア：TOPIX-17のETFの騰落率 − TOPIX連動ETF(1306.T)の騰落率（相対強度）。日本株のみ。
+ *   地合い    ：TOPIX(1306.T)の25日線・75日線とVIX。良(+1)／中立(0)／悪(-1)。米国株はS&P500。
+ *   テーマ    ：株探タグで該当するテーマの基準系列の強さ。おまけの加点（±0.15）。
+ *   相場スコア（参考）：業種と地合いを 0.5/0.5 で平均（データの無い層は除く）＋テーマの加点。
+ *
+ * 総合判定では、業種と地合いを別々の層として使う。ここでの合成点は確認用の目安。
  */
 
 if (!defined('ABSPATH')) exit;
 
-function wp_stocks_ms_weights() {
-    return ['sector' => 0.35, 'index' => 0.35, 'theme' => 0.30];
-}
-
-// セクターの順位スコアに使う期間と重み
+// 業種スコアに使う期間と重み
 function wp_stocks_ms_sector_period_weights() {
     return ['1ヶ月' => 0.3, '2ヶ月' => 0.3, '6ヶ月' => 0.4];
 }
 
-// 順位（1=最上位）→ -1〜+1
-function wp_stocks_ms_rank_score($rank, $n) {
-    return $n > 1 ? 1 - 2 * ($rank - 1) / ($n - 1) : 0.0;
+// 相対強度（TOPIXとの差・ポイント）がこの値で±1になる
+function wp_stocks_ms_sector_scale() {
+    return ['1ヶ月' => 5.0, '2ヶ月' => 8.0, '6ヶ月' => 15.0];
+}
+
+// 相場スコア（参考）の合成：業種と地合いの重み、テーマの加点の大きさ
+function wp_stocks_ms_blend() {
+    return ['sector' => 0.5, 'regime' => 0.5, 'theme_bonus' => 0.15];
 }
 
 // --------------------------------------------------
@@ -75,7 +78,7 @@ function wp_stocks_ms_sector_table() {
     $map  = wp_stocks_get_topix17_sector_map();
     $etfs = [];
     foreach ((array) $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE is_sector_etf = 1") as $s) {
-        if (isset($map[$s->code])) $etfs[$s->code] = $s;   // TOPIX-17以外のセクターETFは順位に混ぜない
+        if (isset($map[$s->code])) $etfs[$s->code] = $s;   // TOPIX-17以外のセクターETFは混ぜない
     }
     $cache = $etfs
         ? wp_stocks_ms_build_sector_table($etfs, wp_stocks_get_etf_price_history(array_values($etfs), 400))
@@ -83,8 +86,29 @@ function wp_stocks_ms_sector_table() {
     return $cache;
 }
 
+// 相対強度の比較先：TOPIX連動ETF(1306.T)の期間別騰落率。履歴が無ければ17業種の単純平均で代用
+function wp_stocks_ms_market_returns() {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+
+    $r = wp_stocks_index_period_returns('1306.T')['returns'];
+    if (array_filter($r, function ($v) { return $v !== null; })) {
+        return $cache = ['returns' => $r, 'source' => 'TOPIX連動ETF(1306)'];
+    }
+    $avg = [];
+    $t   = wp_stocks_ms_sector_table();
+    foreach (array_keys(wp_stocks_index_period_defs()) as $label) {
+        $vals = [];
+        foreach ($t['returns'] as $row) {
+            if ($row[$label] !== null) $vals[] = $row[$label];
+        }
+        $avg[$label] = $vals ? array_sum($vals) / count($vals) : null;
+    }
+    return $cache = ['returns' => $avg, 'source' => '17業種の平均'];
+}
+
 // --------------------------------------------------
-// 部品1：セクター（日本株のみ）。TOPIX-17の中での順位（1ヶ月・2ヶ月・6ヶ月）
+// 業種スコア（日本株のみ）：業種ETFの騰落率 − TOPIXの騰落率（1ヶ月・2ヶ月・6ヶ月）を±1に直して加重平均
 // --------------------------------------------------
 function wp_stocks_ms_sector_part($stock) {
     if (($stock->currency ?? 'JPY') === 'USD') return null;
@@ -94,78 +118,103 @@ function wp_stocks_ms_sector_part($stock) {
     if (!$code) return null;
 
     $t = wp_stocks_ms_sector_table();
-    if (empty($t['ranks'][$code])) return null;
+    if (empty($t['returns'][$code])) return null;
+    $mkt   = wp_stocks_ms_market_returns();
+    $scale = wp_stocks_ms_sector_scale();
 
-    $sum = 0; $wsum = 0; $all_bottom = true; $detail = [];
+    $sum = 0; $wsum = 0; $detail = [];
     foreach (wp_stocks_ms_sector_period_weights() as $label => $w) {
-        $rank = $t['ranks'][$code][$label] ?? null;
-        $n    = $t['counts'][$label] ?? 0;
-        if ($rank === null || $n < 2) continue;
-        $sum  += $w * wp_stocks_ms_rank_score($rank, $n);
+        $ret = $t['returns'][$code][$label] ?? null;
+        $mk  = $mkt['returns'][$label] ?? null;
+        if ($ret === null || $mk === null) continue;
+        $diff = $ret - $mk;
+        $sum  += $w * max(-1, min(1, $diff / $scale[$label]));
         $wsum += $w;
-        $detail[$label] = $rank . '/' . $n;
-        if ($rank <= $n - intdiv($n, 3)) $all_bottom = false;   // 下位3分の1に入っていない期間がある
+        $detail[$label] = ['diff' => $diff, 'rank' => isset($t['ranks'][$code][$label]) ? $t['ranks'][$code][$label] . '/' . ($t['counts'][$label] ?? '?') : '-'];
     }
     if ($wsum <= 0) return null;
 
     $map = wp_stocks_get_topix17_sector_map();
     return [
-        'score'      => $sum / $wsum,
-        'detail'     => $detail,
-        'all_bottom' => $all_bottom && count($detail) >= 2,
-        'etf'        => $code,
-        'name'       => str_replace('NF・', '', $map[$code]['name'] ?? $code),
+        'score'  => $sum / $wsum,
+        'detail' => $detail,
+        'etf'    => $code,
+        'name'   => str_replace('NF・', '', $map[$code]['name'] ?? $code),
+        'base'   => $mkt['source'],
     ];
 }
 
 // --------------------------------------------------
-// 部品2：指数トレンド（1ヶ月・6ヶ月の騰落の符号＋75日線の上下）。各±1の平均
+// VIX（25以上=注意、30以上=高い）
 // --------------------------------------------------
-function wp_stocks_ms_index_trend($symbol) {
-    static $cache = [];
-    if (isset($cache[$symbol])) return $cache[$symbol];
-
-    $r    = wp_stocks_index_period_returns($symbol);
-    $ret1 = $r['returns']['1ヶ月'] ?? null;
-    $ret6 = $r['returns']['6ヶ月'] ?? null;
-
-    $rows  = wp_stocks_index_history_get($symbol, 200);
+function wp_stocks_ms_vix_state() {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $rows  = wp_stocks_index_history_get('^VIX', 15);
     $n     = count($rows);
-    $above = null;
-    if ($n >= 75) {
-        $sum = 0;
-        for ($i = $n - 75; $i < $n; $i++) $sum += floatval($rows[$i]['close_price']);
-        $above = floatval($rows[$n - 1]['close_price']) > $sum / 75;
-    }
-
-    $signs = [];
-    foreach ([$ret1, $ret6] as $v) {
-        if ($v !== null) $signs[] = $v > 0 ? 1 : ($v < 0 ? -1 : 0);
-    }
-    if ($above !== null) $signs[] = $above ? 1 : -1;
-
-    return $cache[$symbol] = [
-        'score'      => $signs ? array_sum($signs) / count($signs) : null,
-        'ret_1m'     => $ret1,
-        'ret_6m'     => $ret6,
-        'above_ma75' => $above,
-        'asof'       => $r['asof'],
-    ];
+    $close = $n ? floatval($rows[$n - 1]['close_price']) : null;
+    $level = $close === null ? 'unknown' : ($close >= 30 ? 'high' : ($close >= 25 ? 'caution' : 'normal'));
+    return $cache = ['close' => $close, 'level' => $level];
 }
 
-// 銘柄が基準にする指数：米国株=S&P500、日本株=グロース→グロース250 / プライム・スタンダード→TOPIX連動ETF / それ以外→日経平均
-function wp_stocks_ms_reference_index($stock) {
-    if (($stock->currency ?? 'JPY') === 'USD') return '^GSPC';
-    $m = (string) ($stock->market ?? '');
-    if (mb_strpos($m, 'グロース') !== false) $sym = '2516.T';
-    elseif (mb_strpos($m, 'プライム') !== false || mb_strpos($m, 'スタンダード') !== false) $sym = '1306.T';
-    else $sym = '^N225';
-    if ($sym !== '^N225' && wp_stocks_ms_index_trend($sym)['score'] === null) $sym = '^N225';   // 履歴が無ければ日経平均
-    return $sym;
+// 直近 $n 本の終値の単純平均。足りなければ null
+function wp_stocks_ms_sma(array $rows, $n) {
+    $cnt = count($rows);
+    if ($cnt < $n) return null;
+    $sum = 0;
+    for ($i = $cnt - $n; $i < $cnt; $i++) $sum += floatval($rows[$i]['close_price']);
+    return $sum / $n;
 }
 
 // --------------------------------------------------
-// 部品3：テーマの強さ（基準系列の1ヶ月・6ヶ月の騰落。小さな変動は0として扱う）
+// 地合い：TOPIX(米国株はS&P500)の終値と25日線・75日線、VIXから 良(+1)／中立(0)／悪(-1)
+//   良：終値が25日線・75日線の両方より上、かつVIXが25未満（VIXのデータが無ければ無視）
+//   悪：終値が25日線・75日線の両方より下、またはVIXが30以上
+//   それ以外は中立
+// --------------------------------------------------
+function wp_stocks_ms_regime($is_us) {
+    static $cache = [];
+    $key = $is_us ? 'us' : 'jp';
+    if (isset($cache[$key])) return $cache[$key];
+
+    $symbol = $is_us ? '^GSPC' : '1306.T';
+    $rows   = wp_stocks_index_history_get($symbol, 200);
+    if (!$is_us && count($rows) < 75) {                 // TOPIX連動ETFの履歴が無ければ日経平均で代用
+        $symbol = '^N225';
+        $rows   = wp_stocks_index_history_get($symbol, 200);
+    }
+    $n     = count($rows);
+    $close = $n ? floatval($rows[$n - 1]['close_price']) : null;
+    $ma25  = wp_stocks_ms_sma($rows, 25);
+    $ma75  = wp_stocks_ms_sma($rows, 75);
+    $vix   = wp_stocks_ms_vix_state();
+
+    $level = 'neutral'; $score = 0; $reasons = [];
+    if ($close === null || $ma25 === null || $ma75 === null) {
+        $level = 'unknown'; $reasons[] = '指数の履歴が足りません';
+    } else {
+        $above = $close > $ma25 && $close > $ma75;
+        $below = $close < $ma25 && $close < $ma75;
+        if ($below)                      $reasons[] = '終値が25日線・75日線の両方を下回る';
+        if ($vix['level'] === 'high')    $reasons[] = 'VIXが30以上';
+        if ($below || $vix['level'] === 'high') {
+            $level = 'bad'; $score = -1;
+        } elseif ($above && $vix['level'] !== 'caution') {
+            $level = 'good'; $score = 1;
+            $reasons[] = '終値が25日線・75日線の両方より上' . ($vix['level'] === 'normal' ? '、VIXは25未満' : '');
+        } else {
+            if ($vix['level'] === 'caution') $reasons[] = 'VIXが25以上30未満';
+            if (!$above && !$below)          $reasons[] = '終値が25日線と75日線の間';
+        }
+    }
+    return $cache[$key] = [
+        'level' => $level, 'score' => $score, 'reasons' => $reasons,
+        'symbol' => $symbol, 'close' => $close, 'ma25' => $ma25, 'ma75' => $ma75, 'vix' => $vix,
+    ];
+}
+
+// --------------------------------------------------
+// テーマの強さ（基準系列の1ヶ月・6ヶ月の騰落。小さな変動は0として扱う）
 // --------------------------------------------------
 function wp_stocks_ms_theme_signal($key) {
     static $cache = [];
@@ -185,32 +234,13 @@ function wp_stocks_ms_theme_signal($key) {
 }
 
 // --------------------------------------------------
-// VIX（地合いの目安）。25以上=注意、30以上=高い
-// --------------------------------------------------
-function wp_stocks_ms_vix_state() {
-    static $cache = null;
-    if ($cache !== null) return $cache;
-    $rows  = wp_stocks_index_history_get('^VIX', 15);
-    $n     = count($rows);
-    $close = $n ? floatval($rows[$n - 1]['close_price']) : null;
-    $level = $close === null ? 'unknown' : ($close >= 30 ? 'high' : ($close >= 25 ? 'caution' : 'normal'));
-    return $cache = ['close' => $close, 'level' => $level];
-}
-
-// --------------------------------------------------
 // 相場スコア本体
-// 戻り値: ['score' => -1〜+1 | null, 'parts' => [...], 'headwind' => bool, 'reasons' => [..], 'ref' => 基準指数, 'vix' => [...]]
+// 戻り値: ['score' => 合成点(参考) | null, 'sector' => 業種, 'regime' => 地合い, 'theme' => テーマ]
 // --------------------------------------------------
 function wp_stocks_market_score($stock) {
-    $weights = wp_stocks_ms_weights();
-    $parts   = [];
-
-    $parts['sector'] = wp_stocks_ms_sector_part($stock);
-
-    $ref   = wp_stocks_ms_reference_index($stock);
-    $trend = wp_stocks_ms_index_trend($ref);
-    $trend['symbol'] = $ref;
-    $parts['index']  = $trend['score'] !== null ? $trend : null;
+    $blend  = wp_stocks_ms_blend();
+    $sector = wp_stocks_ms_sector_part($stock);
+    $regime = wp_stocks_ms_regime(($stock->currency ?? 'JPY') === 'USD');
 
     $defs = wp_stocks_theme_defs();
     $ts = []; $names = [];
@@ -218,29 +248,20 @@ function wp_stocks_market_score($stock) {
         $sig = wp_stocks_ms_theme_signal($key);
         if ($sig !== null) { $ts[] = $sig; $names[] = $defs[$key]['label']; }
     }
-    $parts['theme'] = $ts ? ['score' => array_sum($ts) / count($ts), 'themes' => $names] : null;
+    $theme = $ts ? ['score' => array_sum($ts) / count($ts), 'themes' => $names] : null;
 
     $sum = 0; $wsum = 0;
-    foreach ($parts as $k => $p) {
-        if ($p === null) continue;
-        $sum  += $weights[$k] * $p['score'];
-        $wsum += $weights[$k];
-    }
-    $score = $wsum > 0 ? max(-1, min(1, $sum / $wsum)) : null;
+    if ($sector !== null)               { $sum += $blend['sector'] * $sector['score'];  $wsum += $blend['sector']; }
+    if ($regime['level'] !== 'unknown') { $sum += $blend['regime'] * $regime['score'];  $wsum += $blend['regime']; }
+    $score = $wsum > 0 ? $sum / $wsum : null;
+    if ($score !== null && $theme !== null) $score += $blend['theme_bonus'] * $theme['score'];
+    if ($score !== null) $score = max(-1, min(1, $score));
 
-    $reasons = [];
-    $sec = $parts['sector'];
-    if ($sec && $sec['all_bottom'] && $parts['index'] && $parts['index']['score'] < 0) {
-        $reasons[] = 'セクターが主要期間ですべて下位3分の1、かつ指数が弱い';
-    }
-    $vix = wp_stocks_ms_vix_state();
-    if ($vix['level'] === 'high') $reasons[] = 'VIXが30以上';
-
-    return ['score' => $score, 'parts' => $parts, 'headwind' => !empty($reasons), 'reasons' => $reasons, 'ref' => $ref, 'vix' => $vix];
+    return ['score' => $score, 'sector' => $sector, 'regime' => $regime, 'theme' => $theme];
 }
 
 // --------------------------------------------------
-// マーケット情報「指数」タブ：相場スコアの確認用の表（ウォッチ・保有の全銘柄、スコアの高い順）
+// マーケット情報「指数」タブ：相場スコアの確認用の表（ウォッチ・保有の全銘柄、合成点の高い順）
 // --------------------------------------------------
 function wp_stocks_render_market_score_panel() {
     global $wpdb;
@@ -263,47 +284,54 @@ function wp_stocks_render_market_score_panel() {
         $c = $v >= 0 ? '#e74c3c' : '#3498db';
         return '<span style="color:' . $c . ';font-weight:bold;">' . ($v >= 0 ? '+' : '') . number_format($v, 2) . '</span>';
     };
-
-    $vix = wp_stocks_ms_vix_state();
-    $vix_label = ['normal' => '通常', 'caution' => '注意（25以上）', 'high' => '高い（30以上）', 'unknown' => 'データなし'][$vix['level']];
-    $vix_color = ['normal' => '#27ae60', 'caution' => '#e67e22', 'high' => '#c0392b', 'unknown' => '#999'][$vix['level']];
+    $lv_label = ['good' => '良', 'neutral' => '中立', 'bad' => '悪', 'unknown' => 'データなし'];
+    $lv_color = ['good' => '#e74c3c', 'neutral' => '#888', 'bad' => '#3498db', 'unknown' => '#bbb'];
+    $regime_line = function ($label, $g) use ($lv_label, $lv_color) {
+        $num = function ($v) { return $v === null ? '-' : number_format($v, 1); };
+        return '<div style="margin:2px 0;"><strong>' . esc_html($label) . '：<span style="color:' . $lv_color[$g['level']] . ';">' . $lv_label[$g['level']] . '</span></strong>'
+            . ' <span style="color:#666;font-size:12px;">' . esc_html($g['symbol']) . ' 終値 ' . $num($g['close']) . ' / 25日線 ' . $num($g['ma25']) . ' / 75日線 ' . $num($g['ma75'])
+            . ' / VIX ' . $num($g['vix']['close']) . ' ― ' . esc_html(implode('、', $g['reasons'])) . '</span></div>';
+    };
 
     echo '<div style="margin-top:35px;">';
     echo '<h3>&#x1F9ED; 相場スコア（確認用）</h3>';
-    echo '<p style="color:#666;font-size:13px;">セクター（TOPIX-17の順位）・指数トレンド（市場区分ごとの基準指数）・テーマ（株探タグ）を、'
-        . '0.35 / 0.35 / 0.30 で加重平均した -1〜+1 の点数です（データの無い要素は除いて按分）。'
-        . ' VIX：<strong style="color:' . $vix_color . ';">' . ($vix['close'] !== null ? number_format($vix['close'], 1) : '-') . '（' . $vix_label . '）</strong></p>';
+    echo '<div style="background:#f8f9fa;border:1px solid #e3e3e3;padding:8px 12px;margin-bottom:8px;">'
+        . $regime_line('地合い（日本株）', wp_stocks_ms_regime(false))
+        . $regime_line('地合い（米国株）', wp_stocks_ms_regime(true)) . '</div>';
+    echo '<p style="color:#666;font-size:13px;">業種＝業種ETFの騰落率 − TOPIX連動ETFの騰落率（ポイント差を±1に換算、1ヶ月0.3・2ヶ月0.3・6ヶ月0.4）。日本株のみ。'
+        . ' 地合い＝TOPIX（米国株はS&amp;P500）の25日線・75日線とVIXで 良＋1／中立0／悪−1。'
+        . ' 相場スコア（参考）＝業種と地合いを0.5ずつで平均し、テーマ（株探タグ）の強さを±0.15まで加点。</p>';
 
     echo '<div style="max-height:640px;overflow:auto;border:1px solid #ddd;"><table style="border-collapse:collapse;background:#fff;min-width:980px;width:100%;font-size:13px;"><thead><tr style="background:#f8f9fa;position:sticky;top:0;">';
-    foreach (['コード', '銘柄', '相場スコア', 'セクター（順位）', '指数（基準）', 'テーマ', '逆風'] as $h) {
+    foreach (['コード', '銘柄', '相場スコア（参考）', '業種（相対強度）', '地合い', 'テーマ'] as $h) {
         echo '<th style="padding:8px 10px;text-align:left;border-bottom:2px solid #ddd;">' . esc_html($h) . '</th>';
     }
     echo '</tr></thead><tbody>';
 
     foreach ($rows as $r) {
-        $s = $r['s']; $m = $r['m']; $p = $m['parts'];
+        $s = $r['s']; $m = $r['m'];
 
-        $sec = $p['sector']
-            ? $fmt($p['sector']['score']) . ' <span style="color:#888;font-size:11px;">' . esc_html($p['sector']['name']) . ' ' . esc_html(implode(' / ', $p['sector']['detail'])) . '</span>'
+        if ($m['sector']) {
+            $parts = [];
+            foreach ($m['sector']['detail'] as $label => $d) {
+                $parts[] = $label . ' ' . ($d['diff'] >= 0 ? '+' : '') . number_format($d['diff'], 1) . 'pt(' . $d['rank'] . ')';
+            }
+            $sec = $fmt($m['sector']['score']) . ' <span style="color:#888;font-size:11px;">' . esc_html($m['sector']['name'] . '：' . implode(' / ', $parts)) . '</span>';
+        } else {
+            $sec = '<span style="color:#ccc;">-</span>';
+        }
+        $rg  = '<span style="color:' . $lv_color[$m['regime']['level']] . ';font-weight:bold;">' . $lv_label[$m['regime']['level']] . '</span>';
+        $thm = $m['theme']
+            ? $fmt($m['theme']['score']) . ' <span style="color:#888;font-size:11px;">' . esc_html(implode('・', $m['theme']['themes'])) . '</span>'
             : '<span style="color:#ccc;">-</span>';
-        $idx = $p['index']
-            ? $fmt($p['index']['score']) . ' <span style="color:#888;font-size:11px;">' . esc_html($p['index']['symbol']) . '</span>'
-            : '<span style="color:#ccc;">-</span>';
-        $thm = $p['theme']
-            ? $fmt($p['theme']['score']) . ' <span style="color:#888;font-size:11px;">' . esc_html(implode('・', $p['theme']['themes'])) . '</span>'
-            : '<span style="color:#ccc;">-</span>';
-        $hw = $m['headwind']
-            ? '<span style="color:#c0392b;font-weight:bold;" title="' . esc_attr(implode(' / ', $m['reasons'])) . '">&#x26A0;&#xFE0F; 逆風</span>'
-            : '';
 
         echo '<tr>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . esc_html($s->code) . '</td>'
-            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . esc_html($s->name) . '</td>'
+            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;"><a href="' . esc_url(admin_url('admin.php?page=wp-stocks-company&stock_id=' . intval($s->id))) . '">' . esc_html($s->name) . '</a></td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;font-size:14px;">' . $fmt($m['score']) . '</td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $sec . '</td>'
-            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $idx . '</td>'
+            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $rg . '</td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $thm . '</td>'
-            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $hw . '</td>'
             . '</tr>';
     }
     echo '</tbody></table></div></div>';
