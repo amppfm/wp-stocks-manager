@@ -23,6 +23,9 @@ function wp_stocks_theme_reference_groups() {
             ['label' => 'ゴールド（SPDRゴールド 1326）',     'symbol' => '1326.T'],
             ['label' => '高配当（日経高配当50 1489）',       'symbol' => '1489.T'],
         ],
+        '米国セクターETF（SPDR）' => array_map(function ($sym, $d) {
+            return ['label' => $d['label'] . '（' . $sym . '）', 'symbol' => $sym];
+        }, array_keys(wp_stocks_us_sector_etfs()), array_values(wp_stocks_us_sector_etfs())),
         'テーマETF（米国）' => [
             ['label' => '防衛（ITA）',                       'symbol' => 'ITA'],
             ['label' => 'サイバーセキュリティ（CIBR）',      'symbol' => 'CIBR'],
@@ -32,6 +35,35 @@ function wp_stocks_theme_reference_groups() {
             ['label' => 'ゴールド（GLD）',                   'symbol' => 'GLD'],
         ],
     ];
+}
+
+// 米国株のセクター（業種）用：SPDRのセクターETF11本。names は stocks.sector に入っている表記（英語・日本語の両方）
+function wp_stocks_us_sector_etfs() {
+    return [
+        'XLK'  => ['label' => 'テクノロジー', 'names' => ['Technology', 'テクノロジー', '情報技術']],
+        'XLC'  => ['label' => '通信サービス', 'names' => ['Communication Services', '通信サービス']],
+        'XLY'  => ['label' => '一般消費財',   'names' => ['Consumer Cyclical', 'Consumer Discretionary', '消費財(景気敏感)', '消費財（景気敏感）']],
+        'XLP'  => ['label' => '生活必需品',   'names' => ['Consumer Defensive', 'Consumer Staples', '消費財(生活必需品)', '消費財（生活必需品）']],
+        'XLF'  => ['label' => '金融',         'names' => ['Financial Services', 'Financials', '金融サービス']],
+        'XLV'  => ['label' => 'ヘルスケア',   'names' => ['Healthcare', 'Health Care', 'ヘルスケア']],
+        'XLI'  => ['label' => '資本財',       'names' => ['Industrials', '資本財・サービス']],
+        'XLE'  => ['label' => 'エネルギー',   'names' => ['Energy', 'エネルギー']],
+        'XLB'  => ['label' => '素材',         'names' => ['Basic Materials', 'Materials', '素材']],
+        'XLU'  => ['label' => '公益事業',     'names' => ['Utilities', '公益事業']],
+        'XLRE' => ['label' => '不動産',       'names' => ['Real Estate', '不動産']],
+    ];
+}
+
+// stocks.sector の表記から、対応するSPDRセクターETFのシンボルを返す（大文字小文字は区別しない）。無ければ null
+function wp_stocks_us_sector_etf_for($sector) {
+    $sector = mb_strtolower(trim((string) $sector));
+    if ($sector === '') return null;
+    foreach (wp_stocks_us_sector_etfs() as $sym => $d) {
+        foreach ($d['names'] as $n) {
+            if (mb_strtolower($n) === $sector) return $sym;
+        }
+    }
+    return null;
 }
 
 // 履歴の取得対象に加える用：[symbol => label]

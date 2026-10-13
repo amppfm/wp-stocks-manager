@@ -3,7 +3,7 @@
  * WP Stocks Manager — 相場スコア（総合判定の「業種」と「地合い」の層＋テーマのおまけ加点）
  * 2026-10-12 追加／2026-10-13 5層構成に合わせて作り直し。
  *
- *   業種スコア：TOPIX-17のETFの騰落率 − TOPIX連動ETF(1306.T)の騰落率（相対強度）。日本株のみ。
+ *   業種スコア：業種ETFの騰落率 − 市場の騰落率（相対強度）。日本株はTOPIX-17のETF − TOPIX連動ETF(1306.T)、米国株はSPDRのセクターETF − S&P500。
  *   地合い    ：TOPIX(1306.T)の25日線・75日線とVIX。良(+1)／中立(0)／悪(-1)。米国株はS&P500。
  *   テーマ    ：株探タグで該当するテーマの基準系列の強さ。一致したタグの数で重みづけして平均する。
  *   相場スコア（参考）：業種と地合いを 0.5/0.5 で平均（データの無い層は除く）したものを85%、テーマを15%で混ぜる。
@@ -110,8 +110,56 @@ function wp_stocks_ms_market_returns() {
 // --------------------------------------------------
 // 業種スコア（日本株のみ）：業種ETFの騰落率 − TOPIXの騰落率（1ヶ月・2ヶ月・6ヶ月）を±1に直して加重平均
 // --------------------------------------------------
+// 米国のSPDRセクターETF11本の期間別騰落率と順位（1リクエスト内ではキャッシュ）
+function wp_stocks_ms_us_sector_table() {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $defs = wp_stocks_index_period_defs();
+    $returns = [];
+    foreach (array_keys(wp_stocks_us_sector_etfs()) as $sym) {
+        $returns[$sym] = wp_stocks_index_period_returns($sym)['returns'];
+    }
+    $ranks = []; $counts = [];
+    foreach (array_keys($defs) as $label) {
+        $vals = [];
+        foreach ($returns as $sym => $row) {
+            if (($row[$label] ?? null) !== null) $vals[$sym] = $row[$label];
+        }
+        arsort($vals);
+        $counts[$label] = count($vals);
+        $r = 0;
+        foreach ($vals as $sym => $v) { $r++; $ranks[$sym][$label] = $r; }
+    }
+    return $cache = ['returns' => $returns, 'ranks' => $ranks, 'counts' => $counts];
+}
+
+// 米国株の業種スコア：SPDRセクターETFの騰落率 − S&P500の騰落率（日本株と同じ期間・重み・換算）
+function wp_stocks_ms_sector_part_us($stock) {
+    $etf = wp_stocks_us_sector_etf_for(wp_stocks_get_effective_sector($stock));
+    if ($etf === null) return null;
+
+    $t     = wp_stocks_ms_us_sector_table();
+    $mkt   = wp_stocks_index_period_returns('^GSPC')['returns'];
+    $scale = wp_stocks_ms_sector_scale();
+
+    $sum = 0; $wsum = 0; $detail = [];
+    foreach (wp_stocks_ms_sector_period_weights() as $label => $w) {
+        $ret = $t['returns'][$etf][$label] ?? null;
+        $mk  = $mkt[$label] ?? null;
+        if ($ret === null || $mk === null) continue;
+        $diff = $ret - $mk;
+        $sum  += $w * max(-1, min(1, $diff / $scale[$label]));
+        $wsum += $w;
+        $detail[$label] = ['diff' => $diff, 'rank' => isset($t['ranks'][$etf][$label]) ? $t['ranks'][$etf][$label] . '/' . ($t['counts'][$label] ?? '?') : '-'];
+    }
+    if ($wsum <= 0) return null;
+
+    $defs = wp_stocks_us_sector_etfs();
+    return ['score' => $sum / $wsum, 'detail' => $detail, 'etf' => $etf, 'name' => $defs[$etf]['label'] . '(' . $etf . ')', 'base' => 'S&P500'];
+}
+
 function wp_stocks_ms_sector_part($stock) {
-    if (($stock->currency ?? 'JPY') === 'USD') return null;
+    if (($stock->currency ?? 'JPY') === 'USD') return wp_stocks_ms_sector_part_us($stock);
     $sector = wp_stocks_get_effective_sector($stock);
     if ($sector === '') return null;
     $code = wp_stocks_sector33_to_topix17($sector);
@@ -301,7 +349,7 @@ function wp_stocks_render_market_score_panel() {
     echo '<div style="background:#f8f9fa;border:1px solid #e3e3e3;padding:8px 12px;margin-bottom:8px;">'
         . $regime_line('地合い（日本株）', wp_stocks_ms_regime(false))
         . $regime_line('地合い（米国株）', wp_stocks_ms_regime(true)) . '</div>';
-    echo '<p style="color:#666;font-size:13px;">業種＝業種ETFの騰落率 − TOPIX連動ETFの騰落率（ポイント差を±1に換算、1ヶ月0.3・2ヶ月0.3・6ヶ月0.4）。日本株のみ。'
+    echo '<p style="color:#666;font-size:13px;">業種＝業種ETFの騰落率 − 市場の騰落率（日本株：TOPIX-17のETF − TOPIX連動ETF、米国株：SPDRセクターETF − S&amp;P500。ポイント差を±1に換算、1ヶ月0.3・2ヶ月0.3・6ヶ月0.4）。'
         . ' 地合い＝TOPIX（米国株はS&amp;P500）の25日線・75日線とVIXで 良＋1／中立0／悪−1。'
         . ' 相場スコア（参考）＝業種と地合いを0.5ずつで平均したものを85%、テーマ（株探タグ。一致したタグの数で重みづけ）を15%で混ぜた値。</p>';
 
