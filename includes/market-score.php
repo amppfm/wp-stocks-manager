@@ -85,9 +85,23 @@ function wp_stocks_ms_sector_table() {
     foreach ((array) $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE is_sector_etf = 1") as $s) {
         if (isset($map[$s->code])) $etfs[$s->code] = $s;   // TOPIX-17以外のセクターETFは混ぜない
     }
-    $cache = $etfs
-        ? wp_stocks_ms_build_sector_table($etfs, wp_stocks_get_etf_price_history(array_values($etfs), 400))
-        : ['returns' => [], 'ranks' => [], 'counts' => []];
+    if (!$etfs) return $cache = ['returns' => [], 'ranks' => [], 'counts' => []];
+
+    // 元データは指数履歴（1306と同じ取得元）を優先。まだ溜まっていない（126営業日未満）ETFだけ、従来の価格記録で代用する
+    $hist     = [];
+    $fallback = null;
+    foreach ($etfs as $code => $s) {
+        $rows = function_exists('wp_stocks_index_history_get') ? wp_stocks_index_history_get($code . '.T', 420) : [];
+        if (count($rows) >= 130) {
+            $series = [];
+            foreach ($rows as $r) $series[] = ['date' => $r['trade_date'], 'price' => (float)$r['close_price'], 'previous_close' => 0.0];
+            $hist[$s->id] = $series;
+        } else {
+            if ($fallback === null) $fallback = wp_stocks_get_etf_price_history(array_values($etfs), 400);
+            if (isset($fallback[$s->id])) $hist[$s->id] = $fallback[$s->id];
+        }
+    }
+    $cache = wp_stocks_ms_build_sector_table($etfs, $hist);
     return $cache;
 }
 

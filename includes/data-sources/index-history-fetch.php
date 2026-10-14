@@ -24,6 +24,12 @@ function wp_stocks_index_history_symbols() {
             $list[$symbol] = $label;
         }
     }
+    // TOPIX-17業種ETF（1617〜1633）：業種スコアの元データ。1306(TOPIX)と同じ取得元・同じ日付でそろえる
+    if (function_exists('wp_stocks_get_topix17_sector_map')) {
+        foreach (wp_stocks_get_topix17_sector_map() as $code => $d) {
+            $list[$code . '.T'] = $d['name'];
+        }
+    }
     return $list;
 }
 
