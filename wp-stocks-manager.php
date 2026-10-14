@@ -40,6 +40,7 @@ require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/index-history-fetch.p
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/index-period-returns.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/market-themes.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/market-score.php';
+require_once WP_STOCKS_PLUGIN_DIR . 'includes/overall-judgment.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/technicals.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/scoring.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/db.php';
