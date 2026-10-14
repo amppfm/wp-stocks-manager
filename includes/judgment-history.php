@@ -195,10 +195,12 @@ function wp_stocks_jh_record_all() {
 // 記録：地合い（全体）
 // ============================================================
 
-function wp_stocks_jh_last_close($symbol) {
+function wp_stocks_jh_last_close($symbol, $max_age_days = null) {
     if (!function_exists('wp_stocks_index_history_get')) return null;
     $rows = wp_stocks_index_history_get($symbol, 10);
     if (!$rows) return null;
+    // 最終日が古すぎるときは記録しない（古い値を今日の値として残さない）
+    if ($max_age_days !== null && (time() - strtotime(end($rows)['trade_date'])) > $max_age_days * DAY_IN_SECONDS) return null;
     $v = (float)end($rows)['close_price'];
     return $v > 0 ? $v : null;
 }
@@ -255,7 +257,7 @@ function wp_stocks_jh_record_market() {
 
     $row = [
         'topix_close' => $topix, 'topix_ma25' => $ma25, 'topix_ma75' => $ma75,
-        'vix' => wp_stocks_jh_last_close('^VIX'), 'us10y' => wp_stocks_jh_last_close('^TNX'),
+        'vix' => wp_stocks_jh_last_close('^VIX', 7), 'us10y' => wp_stocks_jh_last_close('^TNX', 7),
         'sector_rank_json' => $sector ? wp_json_encode($sector, JSON_UNESCAPED_UNICODE) : null,
         'theme_ret_json'   => $theme ? wp_json_encode($theme, JSON_UNESCAPED_UNICODE) : null,
     ];

@@ -220,8 +220,12 @@ function wp_stocks_ms_vix_state() {
     $rows  = wp_stocks_index_history_get('^VIX', 15);
     $n     = count($rows);
     $close = $n ? floatval($rows[$n - 1]['close_price']) : null;
+    $asof  = $n ? $rows[$n - 1]['trade_date'] : null;
+    // 最終日が古い（暦で7日超＝約5営業日以上更新なし）ときは、古い値で判定しない（不明として扱う）
+    $stale = $asof !== null && (time() - strtotime($asof)) > 7 * DAY_IN_SECONDS;
+    if ($stale) $close = null;
     $level = $close === null ? 'unknown' : ($close >= 30 ? 'high' : ($close >= 25 ? 'caution' : 'normal'));
-    return $cache = ['close' => $close, 'level' => $level];
+    return $cache = ['close' => $close, 'level' => $level, 'asof' => $asof, 'stale' => $stale];
 }
 
 // 直近 $n 本の終値の単純平均。足りなければ null
@@ -252,6 +256,7 @@ function wp_stocks_ms_regime($is_us) {
     }
     $n     = count($rows);
     $close = $n ? floatval($rows[$n - 1]['close_price']) : null;
+    $idx_stale = $n && (time() - strtotime($rows[$n - 1]['trade_date'])) > 7 * DAY_IN_SECONDS;   // 指数自体の更新が止まっている
     $ma25  = wp_stocks_ms_sma($rows, 25);
     $ma75  = wp_stocks_ms_sma($rows, 75);
     $vix   = wp_stocks_ms_vix_state();
@@ -259,7 +264,10 @@ function wp_stocks_ms_regime($is_us) {
     $level = 'neutral'; $score = 0; $reasons = [];
     if ($close === null || $ma25 === null || $ma75 === null) {
         $level = 'unknown'; $reasons[] = '指数の履歴が足りません';
+    } elseif ($idx_stale) {
+        $level = 'unknown'; $reasons[] = '指数の最終更新が古い（' . $rows[$n - 1]['trade_date'] . '）ため判定しません';
     } else {
+        if (!empty($vix['stale'])) $reasons[] = 'VIXの更新が古い（' . $vix['asof'] . '）ため無視';
         $above = $close > $ma25 && $close > $ma75;
         $below = $close < $ma25 && $close < $ma75;
         if ($below)                      $reasons[] = '終値が25日線・75日線の両方を下回る';
