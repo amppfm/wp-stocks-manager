@@ -381,7 +381,7 @@ function wp_stocks_jh_render_tab($stock) {
 
     $asc = array_reverse($rows);
     echo '<div style="display:flex;gap:24px;flex-wrap:wrap;margin:12px 0;">';
-    foreach (['tech_score' => 'テクニカルの総合点', 'fin_score' => '財務スコア', 'news_score' => 'ニュース加減点'] as $col => $label) {
+    foreach (['total_score' => '総合判定の点', 'tech_score' => 'テクニカルの総合点', 'fin_score' => '財務スコア', 'news_score' => 'ニュース加減点'] as $col => $label) {
         $sp = wp_stocks_jh_sparkline(array_map(function ($r) use ($col) { return $r->$col !== null ? (float)$r->$col : null; }, $asc));
         if ($sp === '') continue;
         echo '<div><div style="font-weight:bold;font-size:12px;margin-bottom:4px;">' . esc_html($label) . '</div>' . $sp . '</div>';
@@ -389,8 +389,8 @@ function wp_stocks_jh_render_tab($stock) {
     echo '</div>';
 
     $lab = ['strong_buy' => '強い買い', 'buy' => '買い優勢', 'hold' => 'HOLD', 'sell' => '売り優勢', 'strong_sell' => '強い売り'];
-    echo '<div style="overflow-x:auto;"><table class="widefat striped" style="font-size:12px;min-width:760px;"><thead><tr>'
-        . '<th>日付</th><th>テクニカル</th><th>財務</th><th>ニュース</th><th>業種</th><th style="text-align:right;">終値</th>'
+    echo '<div style="overflow-x:auto;"><table class="widefat striped" style="font-size:12px;min-width:900px;"><thead><tr>'
+        . '<th>日付</th><th style="text-align:right;">総合点</th><th>総合判定</th><th>テクニカル</th><th>財務</th><th>ニュース</th><th>業種</th><th style="text-align:right;">終値</th>'
         . '<th style="text-align:right;">5日後</th><th style="text-align:right;">20日後</th><th style="text-align:right;">60日後</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         $tech = $r->tech_score !== null ? esc_html(($r->tech_score > 0 ? '+' : '') . $r->tech_score) . ($r->tech_label ? '（' . esc_html($lab[$r->tech_label] ?? $r->tech_label) . '）' : '') : '<span style="color:#ccc;">-</span>';
@@ -408,7 +408,18 @@ function wp_stocks_jh_render_tab($stock) {
             $c = $v >= 0 ? '#e74c3c' : '#3498db';
             return '<span style="color:' . $c . ';font-weight:bold;">' . ($v >= 0 ? '+' : '') . number_format((float)$v, 2) . '%</span>';
         };
-        echo '<tr><td>' . esc_html($r->judgment_date) . '</td><td>' . $tech . '</td><td>' . wp_stocks_jh_fmt($r->fin_score) . '</td><td>' . $news . '</td>'
+        // 総合判定（総合判定が記録された日だけ）。色は総合判定タブのラベルと同じ。版は文字の上にカーソルを置くと出る
+        $tot = wp_stocks_jh_fmt($r->total_score ?? null, 0, true);
+        $tl  = '<span style="color:#ccc;">-</span>';
+        if (!empty($r->total_label)) {
+            $tcol = '#555';
+            if (function_exists('wp_stocks_oj_label_defs')) {
+                foreach (wp_stocks_oj_label_defs() as $d) { if ($d[0] === $r->total_label) { $tcol = $d[1]; break; } }
+            }
+            $tl = '<strong style="color:' . esc_attr($tcol) . ';" title="' . esc_attr('版：' . (($r->weights_ver ?? '') !== '' ? $r->weights_ver : '不明')) . '">' . esc_html($r->total_label) . '</strong>'
+                . ' <span style="color:#aaa;font-size:10px;">' . esc_html($r->weights_ver ?? '') . '</span>';
+        }
+        echo '<tr><td>' . esc_html($r->judgment_date) . '</td><td style="text-align:right;">' . $tot . '</td><td>' . $tl . '</td><td>' . $tech . '</td><td>' . wp_stocks_jh_fmt($r->fin_score) . '</td><td>' . $news . '</td>'
             . '<td>' . ($r->sector_code ? esc_html($r->sector_code) : '<span style="color:#ccc;">-</span>') . '</td>'
             . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->price, ($r->price !== null && $r->price < 1000) ? 2 : 0) . '</td>'
             . '<td style="text-align:right;">' . $ret($r->ret_5d) . '</td><td style="text-align:right;">' . $ret($r->ret_20d) . '</td><td style="text-align:right;">' . $ret($r->ret_60d) . '</td></tr>';
@@ -438,5 +449,5 @@ function wp_stocks_jh_render_tab($stock) {
     }
     echo '</tbody></table></div>';
     echo '<p class="description" style="margin-top:6px;">コンセンサス比は、最新の決算短信のQUICKコンセンサスとの差（%）です。52週の位置は、0が安値・100が高値です。OBV 20日は、直近20日の出来高に対する資金の流れ（-1〜+1）です。点数にはまだ反映していません。</p>';
-    echo '<p class="description" style="margin-top:6px;">5・20・60日後の騰落率は、日が経ってから自動で入ります。最新120日分を表示しています。</p>';
+    echo '<p class="description" style="margin-top:6px;">5・20・60日後の騰落率は、日が経ってから自動で入ります。最新120日分を表示しています。総合点・総合判定は、毎日 23:30 の記録のあとに入ります（重みや閾値を変えたときは、横の小さな文字の版で区別できます）。</p>';
 }
