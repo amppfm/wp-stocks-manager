@@ -44,10 +44,13 @@ function wp_stocks_nws_point_defs() {
         'op_up'           => ['営業利益 +20〜50%', 2],
         'op_down_big'     => ['営業利益 −50%以上', -3],
         'op_down'         => ['営業利益 −20〜50%', -2],
-        'div_up'          => ['増配・配当予想の増額', 2],
-        'div_down'        => ['減配・無配・配当予想の減額', -2],
+        'div_up'          => ['増配・配当予想の増額（15%以上／幅不明）', 2],
+        'div_up_small'    => ['増配（15%未満）', 1],
+        'div_down'        => ['減配・無配・配当予想の減額（15%以上／幅不明）', -2],
+        'div_down_small'  => ['減配（15%未満）', -1],
         'div_revival'     => ['復配', 2],
-        'buyback'         => ['自社株買い（発行済み3%未満／不明）', 2],
+        'buyback_small'   => ['自社株買い（発行済み1%未満）', 1],
+        'buyback'         => ['自社株買い（発行済み1〜3%／不明）', 2],
         'buyback_big'     => ['自社株買い（発行済み3%以上）', 3],
         'tob_target'      => ['TOB（当社株式が対象・賛同）', 3],
         'alliance'        => ['資本業務提携', 1],
@@ -734,6 +737,105 @@ function wp_stocks_nws_now() {
 }
 
 // ニュースを判定してeventsへ保存。$full=true は直近分の自動判定を消して全件やり直す
+// 「7398万1400株」「2億株」などを株数(int)にする。読めなければnull
+function wp_stocks_nws_parse_jp_shares($t) {
+    $t = str_replace(',', '', (string)$t);
+    if (!preg_match('/^(?:([0-9]+)億)?(?:([0-9]+)万)?([0-9]*)$/u', $t, $m) || $t === '') return null;
+    $v = (int)($m[1] ?? 0) * 100000000 + (int)($m[2] ?? 0) * 10000 + (int)($m[3] ?? 0);
+    return $v > 0 ? $v : null;
+}
+
+// 直近の発行済株式数（決算データから）。なければnull
+function wp_stocks_nws_shares_outstanding($code) {
+    global $wpdb;
+    $code = wp_stocks_nws_normalize_symbol($code);
+    $q = $wpdb->prefix . 'stock_quarterly_financials';
+    $v = $wpdb->get_var($wpdb->prepare(
+        "SELECT q.shares_outstanding FROM {$q} q INNER JOIN {$wpdb->prefix}stocks s ON s.id = q.stock_id
+         WHERE s.code IN (%s, %s) AND q.shares_outstanding > 0 ORDER BY q.fiscal_year DESC, q.fiscal_quarter DESC LIMIT 1",
+        $code, $code . '.T'));
+    return $v ? (int)$v : null;
+}
+
+// 配当・自社株買いの点を、本文を読んで補正する（TDnet AI／NQNの行）。
+//  - 自社株買い：取得状況・取得結果・取得終了・買付け方法の行は、すでに発表済みの続報なので点を付けない。
+//    規模は、本文の「発行済み株式総数の○%」、または取得株数÷発行済株式数から求める（<1%：小／1〜3%：中／3%以上：大）。
+//  - 配当：「前回予想16円から6円増配し22円」のように本文から増減の幅が読めれば、15%以上は大・未満は小にする。
+//    見出しに「増配」と書かれていない「剰余金の配当に関するお知らせ」も、本文で増減が分かれば点を付ける。
+function wp_stocks_nws_refine_return(array $results, $row) {
+    $hd = mb_convert_kana((string)$row->headline, 'as', 'UTF-8');
+    $is_ai  = strpos($hd, '<TDnet>AI:') === 0;
+    $is_nqn = strpos($hd, '<NQN>') === 0;
+    if (!$is_ai && !$is_nqn) return $results;
+    $body = (string)$row->body;
+    $doc = '';
+    if ($is_ai && preg_match('/開示書類[：:]\s*([^\r\n]+)/u', $body, $m)) $doc = mb_convert_kana($m[1], 'as', 'UTF-8');
+    $flat = preg_replace('/\s+/u', '', mb_convert_kana($body, 'as', 'UTF-8'));
+    $P = wp_stocks_nws_points();
+    $p = wp_stocks_nws_parse_headline($row->headline, $row->issues);
+    if (!$p) return $results;
+    $sources = wp_stocks_nws_sources();
+    if (empty($sources[$p['tag']])) return $results;
+    $code = $p['code'];
+
+    // 結果を1つの要素にまとめて扱う
+    $idx = null;
+    foreach ($results as $i => $c) { if (($c['code'] ?? '') === $code) { $idx = $i; break; } }
+    $hits = $idx !== null ? $results[$idx]['hits'] : [];
+    $changed = false;
+
+    // --- 自社株買い ---
+    $has_bb = false;
+    foreach ($hits as $h) if ($h['group'] === 'buyback') $has_bb = true;
+    if ($has_bb) {
+        $progress = $is_ai && $doc !== '' && preg_match('/取得状況|取得結果|取得終了|取得完了|買付け?に関する|買付取引/u', $doc)
+                    && !preg_match('/取得枠|取得に係る事項|決議/u', $doc);
+        if ($progress) {
+            $hits = array_values(array_filter($hits, function ($h) { return $h['group'] !== 'buyback'; }));
+            $changed = true;
+        } else {
+            $pct = null; $how = '';
+            if (preg_match('/発行済み?株式(?:総?数)?(?:\([^)]*\))?の([0-9.]+)%/u', $flat, $x)) { $pct = (float)$x[1]; $how = '発行済み' . $pct . '%'; }
+            elseif (preg_match('/株数(?:[^0-9億万]*?\|)?([0-9億万,]+)株/u', $flat, $x)) {
+                $n = wp_stocks_nws_parse_jp_shares($x[1]); $out = wp_stocks_nws_shares_outstanding($code);
+                if ($n && $out) { $pct = $n / $out * 100; $how = sprintf('取得枠%s株＝発行済みの約%.1f%%', $x[1], $pct); }
+            }
+            if ($pct !== null) {
+                $key = $pct >= 3.0 ? 'buyback_big' : ($pct >= 1.0 ? 'buyback' : 'buyback_small');
+                $hits = array_values(array_filter($hits, function ($h) { return $h['group'] !== 'buyback'; }));
+                wp_stocks_nws_hit($hits, $P, $key, 'buyback', '自社株買い（' . $how . '）');
+                $changed = true;
+            }
+        }
+    }
+
+    // --- 配当 ---
+    $div_doc = $is_ai ? ($doc !== '' && preg_match('/剰余金の配当|配当予想の修正|配当方針/u', $doc) && !preg_match('/分配金|ファンド|決算/u', $doc)) : false;
+    if ($div_doc) {
+        $dir = null; $prev = null; $delta = null; $new = null;
+        if (preg_match('/([0-9.]+)円(?:[0-9]+銭)?から([0-9.]+)円(?:[0-9]+銭)?(増配|減配)し[、,]?([0-9.]+)円/u', $flat, $x)) {
+            $prev = (float)$x[1]; $delta = (float)$x[2]; $dir = $x[3] === '増配' ? 'up' : 'down'; $new = (float)$x[4];
+        } elseif (preg_match('/([0-9.]+)円(?:[0-9]+銭)?から([0-9.]+)円(?:[0-9]+銭)?に(増額|引き上げ|減額|引き下げ)/u', $flat, $x)) {
+            $prev = (float)$x[1]; $new = (float)$x[2]; $dir = in_array($x[3], ['増額', '引き上げ'], true) ? 'up' : 'down'; $delta = abs($new - $prev);
+        }
+        if ($dir !== null && $prev > 0 && $delta > 0) {
+            $pc = $delta / $prev * 100;
+            $key = $dir === 'up' ? ($pc >= 15 ? 'div_up' : 'div_up_small') : ($pc >= 15 ? 'div_down' : 'div_down_small');
+            $hits = array_values(array_filter($hits, function ($h) { return $h['group'] !== 'dividend'; }));
+            wp_stocks_nws_hit($hits, $P, $key, 'dividend', sprintf('%s（%s円→%s円・%s%.0f%%）', $dir === 'up' ? '増配' : '減配', rtrim(rtrim(number_format($prev, 2), '0'), '.'), rtrim(rtrim(number_format($new, 2), '0'), '.'), $dir === 'up' ? '+' : '−', $pc));
+            $changed = true;
+        }
+    }
+
+    if (!$changed) return $results;
+    if ($idx !== null) {
+        if ($hits) $results[$idx]['hits'] = $hits; else unset($results[$idx]);
+    } elseif ($hits) {
+        $results[] = ['code' => $code, 'tag' => $p['tag'], 'hits' => $hits];
+    }
+    return array_values($results);
+}
+
 function wp_stocks_nws_classify_recent($full = false) {
     global $wpdb;
     $res = ['scanned' => 0, 'events' => 0, 'error' => ''];
@@ -773,6 +875,7 @@ function wp_stocks_nws_classify_recent($full = false) {
         }
         $sur = wp_stocks_nws_surprise_hits($r);
         if ($sur) $results[] = $sur;
+        $results = wp_stocks_nws_refine_return($results, $r);
         foreach ($results as $c) { $c = wp_stocks_nws_soften_revision($c, $r->news_at); $c = wp_stocks_nws_damp_growth($c, $r->news_at); foreach ($c['hits'] as $h) {
             $ok = $wpdb->query($wpdb->prepare(
                 "INSERT INTO {$ev_t} (news_id, code, event_at, event_date, event_type, event_group, points, reason, headline, source, created_at)
