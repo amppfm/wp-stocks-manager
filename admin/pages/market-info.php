@@ -382,7 +382,7 @@ function wp_stocks_render_tachibana_news_tab() {
 
 function wp_stocks_market_info_page() {
     $active_tab = sanitize_text_field($_GET['mtab'] ?? 'news');
-    if (!in_array($active_tab, ['news', 'tcnews', 'index', 'overall', 'heatmap', 'disclosure'], true)) $active_tab = 'news';
+    if (!in_array($active_tab, ['news', 'tcnews', 'index', 'overall', 'overall_us', 'heatmap', 'disclosure'], true)) $active_tab = 'news';
 
     echo '<div class="wrap"><h1>&#x1F30D; マーケット情報</h1>';
 
@@ -390,7 +390,8 @@ function wp_stocks_market_info_page() {
         'news'       => '&#x1F4F0; ニュース',
         'tcnews'     => '&#x1F4E1; 立花ニュース',
         'index'      => '&#x1F4CA; 指数',
-        'overall'    => '&#x1F3AF; 総合判定',
+        'overall'    => '&#x1F3AF; 総合判定（日本）',
+        'overall_us' => '&#x1F3AF; 総合判定（米国）',
         'heatmap'    => '&#x1F321; ヒートマップ',
         'disclosure' => '&#x1F4CB; 適時開示',
     ];
@@ -447,7 +448,9 @@ function wp_stocks_market_info_page() {
         wp_stocks_render_market_score_panel();
         wp_stocks_render_index_history_panel();
     } elseif ($active_tab === 'overall') {
-        wp_stocks_render_overall_judgment_panel();
+        wp_stocks_render_overall_judgment_panel('jp');
+    } elseif ($active_tab === 'overall_us') {
+        wp_stocks_render_overall_judgment_panel('us');
     } elseif ($active_tab === 'heatmap') {
         wp_stocks_sector_page(true, admin_url('admin.php?page=wp-stocks-market&mtab=heatmap'));
     } elseif ($active_tab === 'tcnews') {

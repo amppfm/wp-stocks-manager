@@ -1,21 +1,26 @@
 <?php
 /**
  * WP Stocks Manager — 総合判定（5層の合算）
- * 2026-10-14 追加（第1版・仮の重みと閾値）。
+ * 2026-10-14 追加（第1版）／2026-10-15 第1.1版（日本・米国のタブ分け、タイミングの条件、欠けた層は0、財務はデータが足りない銘柄に使わない）。
  *
  * 5層：土台（財務）／タイミング（テクニカルの複合シグナル）／材料（ニュース加減点）／業種／地合い。
- *   - タイミング・材料・業種・地合いは、それぞれ -1〜+1 に直して重みづけ平均する（データの無い層は除いて按分）。
- *   - 土台（財務スコア）は足し算に混ぜない。財務が「要注意」（50点未満）のとき、買い側の判定を1段階下げる。
- *   - タイミング（テクニカル）が無い銘柄は、判定しない。
+ *   - タイミング・材料・業種・地合いを、それぞれ -1〜+1 に直して重みづけ平均する。
+ *     データの無い層（米国株の材料、業種が決まらない銘柄、更新が古い地合いなど）は0（中立）として扱う。
+ *     業種の層には、株探タグのテーマの強さを15％だけ混ぜる（相場スコアと同じ。テーマの無い銘柄は業種だけ）。
+ *     タイミング（テクニカル）が無い銘柄は、判定しない。
+ *   - 買い側・売り側のラベルは、テクニカルの方向が合うときだけ（買い側＝テクニカルが買い優勢以上、売り側＝売り優勢以下）。
+ *     合わないときは中立にとどめる（業種と地合いだけで買い側にならないように）。
+ *   - 土台（財務スコア）は足し算に入れない。財務が「要注意」（50点未満）のとき、買い側のラベルを1段階下げる。
+ *     財務スコアの取れた項目が半分に満たない銘柄（新規上場など）には、このフィルターを使わない。
  *   - 判定の材料の6要素（決算サプライズ・EPS修正など）は、点数への換算が決まるまで、この判定には入れない。
  * 重み・閾値は仮の値。判定履歴（stock_judgment_history）の実績を見て調整する。weights_ver に版を記録する。
  */
 
 if (!defined('ABSPATH')) exit;
 
-function wp_stocks_oj_version() { return 'v1-prov'; }
+function wp_stocks_oj_version() { return 'v1.1-prov'; }
 
-// 層の重み（仮）
+// 層の重み（仮）。合計は1.0
 function wp_stocks_oj_weights() {
     return ['timing' => 0.40, 'catalyst' => 0.25, 'sector' => 0.20, 'regime' => 0.15];
 }
@@ -28,8 +33,17 @@ function wp_stocks_oj_thresholds() {
 // 財務スコアがこの点数未満なら「要注意」とみなし、買い判定を1段階下げる
 function wp_stocks_oj_fin_gate_score() { return 50; }
 
+// 財務スコアの取れた項目の割合がこれ未満なら、財務フィルターを使わない
+function wp_stocks_oj_fin_min_coverage() { return 0.5; }
+
 // ニュース加減点（±6で頭打ち）を±1に直す
 function wp_stocks_oj_news_scale() { return 6.0; }
+
+// タイミングの条件：テクニカルの「買い優勢」の閾値÷「強い買い」の閾値（既定は 2÷5 ＝ 0.4）
+function wp_stocks_oj_timing_gate() {
+    $th = wp_stocks_get_composite_thresholds();
+    return abs($th['buy']) / max(1, abs($th['strong_buy']));
+}
 
 // ラベル：キー => [表示名, 色]（テクニカルの複合シグナルと同じ呼び方）
 function wp_stocks_oj_label_defs() {
@@ -44,6 +58,9 @@ function wp_stocks_oj_label_defs() {
 
 function wp_stocks_oj_clamp($v) { return max(-1.0, min(1.0, (float) $v)); }
 
+function wp_stocks_oj_is_buy_side($key)  { return $key === 'strong_buy' || $key === 'buy'; }
+function wp_stocks_oj_is_sell_side($key) { return $key === 'strong_sell' || $key === 'sell'; }
+
 // 総合点からラベルのキーを決める
 function wp_stocks_oj_label_for($total) {
     $th = wp_stocks_oj_thresholds();
@@ -57,43 +74,57 @@ function wp_stocks_oj_label_for($total) {
 // --------------------------------------------------
 // 合算（純粋計算）
 // $layers: ['timing' =>, 'catalyst' =>, 'sector' =>, 'regime' => ]（各 -1〜+1 または null）
-// $fin   : 財務スコア（0〜100）または null
-// 戻り値: ['total' => -1〜+1|null, 'label' => キー|null, 'raw_label' => 財務フィルター前のキー|null,
-//          'gate' => ['applied' => bool, ...], 'layers' => ..., 'weights' => ..., 'used' => [使った層]]
+// $fin   : 財務フィルターに使う財務スコア（0〜100）。使わないときは null
+// 戻り値: ['total' => -1〜+1|null, 'label' => キー|null, 'raw_label' => 条件を掛ける前のキー|null,
+//          'gate' => ['applied' => bool, 'timing' => [...]|null, 'fin' => [...]|null], 'layers' => ..., 'weights' => ..., 'used' => [値のあった層]]
 // --------------------------------------------------
 function wp_stocks_oj_combine(array $layers, $fin = null) {
     $weights = wp_stocks_oj_weights();
-    $sum = 0; $wsum = 0; $used = [];
+    $sum = 0; $used = [];
     foreach ($weights as $k => $wt) {
-        if (array_key_exists($k, $layers) && $layers[$k] !== null) {
-            $sum  += $wt * $layers[$k];
-            $wsum += $wt;
-            $used[] = $k;
-        }
+        $v = array_key_exists($k, $layers) ? $layers[$k] : null;
+        if ($v !== null) $used[] = $k;
+        $sum += $wt * ($v === null ? 0 : $v);       // データの無い層は0（中立）
     }
 
-    $out = ['total' => null, 'label' => null, 'raw_label' => null, 'gate' => ['applied' => false],
+    $out = ['total' => null, 'label' => null, 'raw_label' => null,
+            'gate' => ['applied' => false, 'timing' => null, 'fin' => null],
             'layers' => $layers, 'weights' => $weights, 'used' => $used];
 
     // タイミング（テクニカル）が無い銘柄は判定しない
-    if (!in_array('timing', $used, true) || $wsum <= 0) return $out;
+    if (!in_array('timing', $used, true)) return $out;
 
-    $total = $sum / $wsum;
+    $total = $sum / array_sum($weights);
     $raw   = wp_stocks_oj_label_for($total);
     $label = $raw;
-    if ($fin !== null && $fin < wp_stocks_oj_fin_gate_score() && ($raw === 'strong_buy' || $raw === 'buy')) {
-        $label = $raw === 'strong_buy' ? 'buy' : 'neutral';
-        $out['gate'] = ['applied' => true, 'from' => $raw, 'to' => $label, 'fin' => $fin];
+
+    // タイミングの条件：買い側はテクニカルが買い優勢以上、売り側は売り優勢以下のときだけ
+    $tg = wp_stocks_oj_timing_gate();
+    if (wp_stocks_oj_is_buy_side($label) && $layers['timing'] < $tg) {
+        $out['gate']['timing'] = ['from' => $label, 'to' => 'neutral', 'dir' => 'down'];
+        $label = 'neutral';
+    } elseif (wp_stocks_oj_is_sell_side($label) && $layers['timing'] > -$tg) {
+        $out['gate']['timing'] = ['from' => $label, 'to' => 'neutral', 'dir' => 'up'];
+        $label = 'neutral';
     }
-    $out['total'] = $total;
-    $out['label'] = $label;
+
+    // 財務フィルター：要注意なら、買い側を1段階下げる
+    if ($fin !== null && $fin < wp_stocks_oj_fin_gate_score() && wp_stocks_oj_is_buy_side($label)) {
+        $to = $label === 'strong_buy' ? 'buy' : 'neutral';
+        $out['gate']['fin'] = ['from' => $label, 'to' => $to, 'score' => $fin];
+        $label = $to;
+    }
+
+    $out['gate']['applied'] = $out['gate']['timing'] !== null || $out['gate']['fin'] !== null;
+    $out['total']     = $total;
+    $out['label']     = $label;
     $out['raw_label'] = $raw;
     return $out;
 }
 
 // --------------------------------------------------
 // 1銘柄の入力を、いまのデータから集める
-// 戻り値: ['raw' => [tech, fin, news, regime_level], 'layers' => [...], 'market' => wp_stocks_market_score の結果]
+// 戻り値: ['raw' => [tech, fin, fin_cov, fin_ok, news, regime_level], 'layers' => [...], 'market' => wp_stocks_market_score の結果]
 // --------------------------------------------------
 function wp_stocks_oj_inputs($stock) {
     global $wpdb;
@@ -111,11 +142,18 @@ function wp_stocks_oj_inputs($stock) {
         $timing = wp_stocks_oj_clamp($tech_score / max(1, abs($th['strong_buy'])));   // 「強い買い」の閾値で±1
     }
 
-    // 土台：財務スコア
-    $fin = null;
+    // 土台：財務スコアと、取れた項目の割合（足りない銘柄はフィルターに使わない）
+    $fin = null; $fin_cov = null; $fin_ok = false;
     if (function_exists('wp_stocks_calc_score')) {
         $sc = wp_stocks_calc_score($stock);
-        if (is_array($sc) && isset($sc['score'])) $fin = (int) $sc['score'];
+        if (is_array($sc) && isset($sc['score'])) {
+            $fin = (int) $sc['score'];
+            $fin_cov = isset($sc['coverage']) ? (string) $sc['coverage'] : null;
+            $fin_ok = true;
+            if ($fin_cov !== null && preg_match('#^(\d+)/(\d+)$#', $fin_cov, $mm) && (int) $mm[2] > 0) {
+                $fin_ok = ((int) $mm[1] / (int) $mm[2]) >= wp_stocks_oj_fin_min_coverage();
+            }
+        }
     }
 
     // 材料：ニュース加減点（日本株のみ）
@@ -129,13 +167,18 @@ function wp_stocks_oj_inputs($stock) {
     }
     $catalyst = $news === null ? null : wp_stocks_oj_clamp($news / wp_stocks_oj_news_scale());
 
-    // 業種・地合い：相場スコアの部品
-    $m      = wp_stocks_market_score($stock);
-    $sector = $m['sector'] !== null ? $m['sector']['score'] : null;
+    // 業種・地合い：相場スコアの部品。業種の層には、テーマ（株探タグ）の強さを15％だけ混ぜる
+    $m         = wp_stocks_market_score($stock);
+    $sector_sc = $m['sector'] !== null ? $m['sector']['score'] : null;
+    $theme_sc  = $m['theme'] !== null ? $m['theme']['score'] : null;
+    $tb        = wp_stocks_ms_blend()['theme'];
+    if ($sector_sc === null && $theme_sc === null) $sector = null;
+    elseif ($theme_sc === null)                    $sector = $sector_sc;
+    else                                           $sector = (1 - $tb) * ($sector_sc === null ? 0 : $sector_sc) + $tb * $theme_sc;
     $regime = $m['regime']['level'] !== 'unknown' ? $m['regime']['score'] : null;
 
     return [
-        'raw'    => ['tech' => $tech_score, 'fin' => $fin, 'news' => $news, 'regime_level' => $m['regime']['level']],
+        'raw'    => ['tech' => $tech_score, 'fin' => $fin, 'fin_cov' => $fin_cov, 'fin_ok' => $fin_ok, 'news' => $news, 'regime_level' => $m['regime']['level'], 'theme' => $m['theme']],
         'layers' => ['timing' => $timing, 'catalyst' => $catalyst, 'sector' => $sector, 'regime' => $regime],
         'market' => $m,
     ];
@@ -144,7 +187,7 @@ function wp_stocks_oj_inputs($stock) {
 // 1銘柄の総合判定
 function wp_stocks_overall_judgment($stock) {
     $in = wp_stocks_oj_inputs($stock);
-    $r  = wp_stocks_oj_combine($in['layers'], $in['raw']['fin']);
+    $r  = wp_stocks_oj_combine($in['layers'], $in['raw']['fin_ok'] ? $in['raw']['fin'] : null);
     $r['raw']    = $in['raw'];
     $r['market'] = $in['market'];
     return $r;
@@ -190,15 +233,19 @@ function wp_stocks_oj_fill_history() {
 add_action('wp_stocks_judgment_cron', 'wp_stocks_oj_fill_history', 20);   // 既定(10)の記録処理のあとに実行
 
 // --------------------------------------------------
-// マーケット情報「総合判定」タブ（検証用）：ウォッチ・保有の全銘柄を、総合点の高い順に
+// マーケット情報「総合判定」タブ（検証用）。日本株と米国株は別のタブ
+//   $market: 'jp'（日本株）／'us'（米国株）。総合点の高い順に並べる
 // --------------------------------------------------
-function wp_stocks_render_overall_judgment_panel() {
+function wp_stocks_render_overall_judgment_panel($market = 'jp') {
     global $wpdb;
+    $is_us  = $market === 'us';
+    $mtab   = $is_us ? 'overall_us' : 'overall';
     $filter = sanitize_text_field($_GET['st'] ?? 'all');
     if (!in_array($filter, ['all', 'portfolio', 'watch'], true)) $filter = 'all';
 
-    $where = $filter === 'all' ? "status IN ('watch','portfolio')" : "status = '" . esc_sql($filter) . "'";
-    $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE is_sector_etf = 0 AND {$where} ORDER BY code ASC");
+    $where  = $filter === 'all' ? "status IN ('watch','portfolio')" : "status = '" . esc_sql($filter) . "'";
+    $cur    = $is_us ? "currency = 'USD'" : "(currency IS NULL OR currency <> 'USD')";
+    $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE is_sector_etf = 0 AND {$cur} AND {$where} ORDER BY code ASC");
     @set_time_limit(120);
 
     $rows = [];
@@ -212,11 +259,12 @@ function wp_stocks_render_overall_judgment_panel() {
     });
 
     $defs = wp_stocks_oj_label_defs();
-    $cnt = array_fill_keys(array_keys($defs), 0); $none = 0; $gated = 0;
+    $cnt = array_fill_keys(array_keys($defs), 0); $none = 0; $g_timing = 0; $g_fin = 0;
     foreach ($rows as $r) {
         if ($r['r']['label'] === null) { $none++; continue; }
         $cnt[$r['r']['label']]++;
-        if ($r['r']['gate']['applied']) $gated++;
+        if ($r['r']['gate']['timing'] !== null) $g_timing++;
+        if ($r['r']['gate']['fin'] !== null)    $g_fin++;
     }
 
     $fmt = function ($v) {
@@ -225,20 +273,22 @@ function wp_stocks_render_overall_judgment_panel() {
         return '<span style="color:' . $c . ';font-weight:bold;">' . ($v >= 0 ? '+' : '') . number_format($v, 2) . '</span>';
     };
     $small = function ($t) { return ' <span style="color:#888;font-size:11px;">' . esc_html($t) . '</span>'; };
-    $lv = ['good' => '良', 'neutral' => '中立', 'bad' => '悪', 'unknown' => '-'];
+    $lv = ['good' => '良', 'neutral' => '中立', 'bad' => '悪', 'unknown' => '不明'];
     $w  = wp_stocks_oj_weights(); $th = wp_stocks_oj_thresholds();
 
     echo '<div style="margin-top:10px;">';
-    echo '<h3>&#x1F3AF; 総合判定（検証用・第1版）</h3>';
-    echo '<p style="color:#666;font-size:13px;">5層の合算：タイミング（テクニカルの複合点）' . ($w['timing'] * 100) . '％・材料（ニュース加減点）' . ($w['catalyst'] * 100)
-        . '％・業種' . ($w['sector'] * 100) . '％・地合い' . ($w['regime'] * 100) . '％の加重平均（データの無い層は除いて按分）。各層は-1〜+1に換算しています。'
+    echo '<h3>&#x1F3AF; 総合判定（' . ($is_us ? '米国株' : '日本株') . '・検証用・第1.1版）</h3>';
+    echo '<p style="color:#666;font-size:13px;">5層の合算：タイミング（テクニカルの複合点）' . ($w['timing'] * 100) . '％'
+        . ($is_us ? '' : '・材料（ニュース加減点）' . ($w['catalyst'] * 100) . '％') . '・業種' . ($w['sector'] * 100) . '％・地合い' . ($w['regime'] * 100)
+        . '％の加重平均（業種には、株探タグのテーマの強さを15％だけ混ぜています）。各層は-1〜+1に換算し、データの無い層は0（中立）として扱います' . ($is_us ? '（米国株は材料の層がありません）' : '') . '。'
         . ' 総合点は-100〜+100。ラベルは、強い買い＝' . ($th['strong_buy'] * 100) . '以上／買い優勢＝' . ($th['buy'] * 100) . '以上／売り優勢＝' . ($th['sell'] * 100)
-        . '以下／強い売り＝' . ($th['strong_sell'] * 100) . '以下（いずれも仮の値）。'
-        . ' 土台（財務）は足し算に入れず、財務スコアが' . wp_stocks_oj_fin_gate_score() . '点未満（要注意）の銘柄は、買い側のラベルを1段階下げます（表の「↓財務」）。'
-        . ' タイミングが無い銘柄は判定しません。</p>';
+        . '以下／強い売り＝' . ($th['strong_sell'] * 100) . '以下（いずれも仮の値）。</p>'
+        . '<p style="color:#666;font-size:13px;">条件：買い側のラベルはテクニカルが買い優勢以上のときだけ、売り側は売り優勢以下のときだけ（合わないと中立にとどめ、表に「↓タイミング」「↑タイミング」と出します）。'
+        . ' 財務（土台）は足し算に入れず、財務スコアが' . wp_stocks_oj_fin_gate_score() . '点未満（要注意）の銘柄は、買い側を1段階下げます（「↓財務」）。'
+        . ' 財務の取れた項目が半分に満たない銘柄には、この財務フィルターを使いません（財務の数字に「*」）。タイミングが無い銘柄は判定しません。</p>';
 
     // 絞り込みと件数
-    $base = admin_url('admin.php?page=wp-stocks-market&mtab=overall');
+    $base = admin_url('admin.php?page=wp-stocks-market&mtab=' . $mtab);
     echo '<p style="margin:6px 0;">';
     foreach (['all' => 'すべて', 'portfolio' => '保有', 'watch' => 'ウォッチ'] as $k => $lab) {
         $style = $filter === $k ? 'font-weight:bold;text-decoration:none;color:#0073aa;' : 'text-decoration:none;';
@@ -248,10 +298,13 @@ function wp_stocks_render_overall_judgment_panel() {
     foreach ($defs as $k => $d) {
         echo '<span style="display:inline-block;margin-right:14px;"><strong style="color:' . $d[1] . ';">' . esc_html($d[0]) . '</strong> ' . intval($cnt[$k]) . '</span>';
     }
-    echo '<span style="color:#888;">判定なし ' . intval($none) . ' ／ 財務で1段階下げ ' . intval($gated) . '</span></p>';
+    echo '<span style="color:#888;">判定なし ' . intval($none) . ' ／ タイミングで中立にとどめ ' . intval($g_timing) . ' ／ 財務で1段階下げ ' . intval($g_fin) . '</span></p>';
 
-    echo '<div style="max-height:680px;overflow:auto;border:1px solid #ddd;"><table style="border-collapse:collapse;background:#fff;min-width:1000px;width:100%;font-size:13px;"><thead><tr style="background:#f8f9fa;position:sticky;top:0;">';
-    foreach (['コード', '銘柄', '区分', '総合点', '判定', '財務', 'タイミング', '材料', '業種', '地合い'] as $h) {
+    $heads = ['コード', '銘柄', '区分', '総合点', '判定', '財務', 'タイミング'];
+    if (!$is_us) $heads[] = '材料';
+    $heads[] = '業種'; $heads[] = '地合い';
+    echo '<div style="max-height:680px;overflow:auto;border:1px solid #ddd;"><table style="border-collapse:collapse;background:#fff;min-width:980px;width:100%;font-size:13px;"><thead><tr style="background:#f8f9fa;position:sticky;top:0;">';
+    foreach ($heads as $h) {
         echo '<th style="padding:8px 10px;text-align:left;border-bottom:2px solid #ddd;">' . esc_html($h) . '</th>';
     }
     echo '</tr></thead><tbody>';
@@ -267,12 +320,23 @@ function wp_stocks_render_overall_judgment_panel() {
         } else {
             $d = $defs[$r['label']];
             $lab = '<strong style="color:' . $d[1] . ';">' . esc_html($d[0]) . '</strong>';
-            if ($r['gate']['applied']) {
-                $lab .= ' <span style="color:#c0392b;font-size:11px;" title="財務スコア' . intval($r['gate']['fin']) . '点（要注意）のため、' . esc_attr($defs[$r['gate']['from']][0]) . 'から1段階下げました">↓財務</span>';
+            if ($r['gate']['timing'] !== null) {
+                $g = $r['gate']['timing'];
+                $lab .= ' <span style="color:#8e44ad;font-size:11px;" title="テクニカルが' . ($g['dir'] === 'down' ? '買い優勢に届いていない' : '売り優勢に届いていない') . 'ため、' . esc_attr($defs[$g['from']][0]) . 'から中立にとどめました">'
+                    . ($g['dir'] === 'down' ? '↓' : '↑') . 'タイミング</span>';
+            }
+            if ($r['gate']['fin'] !== null) {
+                $g = $r['gate']['fin'];
+                $lab .= ' <span style="color:#c0392b;font-size:11px;" title="財務スコア' . intval($g['score']) . '点（要注意）のため、' . esc_attr($defs[$g['from']][0]) . 'から1段階下げました">↓財務</span>';
             }
         }
-        $fin_cell = $raw['fin'] === null ? '<span style="color:#ccc;">-</span>'
-            : '<span style="color:' . ($raw['fin'] >= 70 ? '#27ae60' : ($raw['fin'] >= 50 ? '#f39c12' : '#e74c3c')) . ';font-weight:bold;">' . intval($raw['fin']) . '</span>';
+        if ($raw['fin'] === null) {
+            $fin_cell = '<span style="color:#ccc;">-</span>';
+        } else {
+            $col = $raw['fin_ok'] ? ($raw['fin'] >= 70 ? '#27ae60' : ($raw['fin'] >= 50 ? '#f39c12' : '#e74c3c')) : '#999';
+            $fin_cell = '<span style="color:' . $col . ';font-weight:bold;"' . (!$raw['fin_ok'] ? ' title="取れた項目 ' . esc_attr((string) $raw['fin_cov']) . '：データが足りないため、財務フィルターは使いません"' : '') . '>'
+                . intval($raw['fin']) . (!$raw['fin_ok'] ? '*' : '') . '</span>';
+        }
 
         echo '<tr>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . esc_html($s->code) . '</td>'
@@ -281,9 +345,12 @@ function wp_stocks_render_overall_judgment_panel() {
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $total . '</td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $lab . '</td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fin_cell . '</td>'
-            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['timing']) . ($raw['tech'] !== null ? $small(($raw['tech'] >= 0 ? '+' : '') . $raw['tech'] . '点') : '') . '</td>'
-            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['catalyst']) . ($raw['news'] !== null ? $small(($raw['news'] >= 0 ? '+' : '') . number_format($raw['news'], 1) . '点') : '') . '</td>'
-            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['sector']) . '</td>'
+            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['timing']) . ($raw['tech'] !== null ? $small(($raw['tech'] >= 0 ? '+' : '') . $raw['tech'] . '点') : '') . '</td>';
+        if (!$is_us) {
+            echo '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['catalyst']) . ($raw['news'] !== null ? $small(($raw['news'] >= 0 ? '+' : '') . number_format($raw['news'], 1) . '点') : '') . '</td>';
+        }
+        echo '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['sector'])
+            . ($raw['theme'] ? $small('テーマ' . ($raw['theme']['score'] >= 0 ? '+' : '') . number_format($raw['theme']['score'], 2)) : '') . '</td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['regime']) . $small($lv[$raw['regime_level']] ?? '-') . '</td>'
             . '</tr>';
     }
