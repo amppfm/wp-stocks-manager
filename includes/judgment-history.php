@@ -418,7 +418,7 @@ function wp_stocks_jh_render_tab($stock) {
     // 判定の材料（生の値）
     echo '<h4 style="margin:18px 0 6px;">判定の材料（生の値）</h4>';
     echo '<div style="overflow-x:auto;"><table class="widefat striped" style="font-size:12px;min-width:860px;"><thead><tr>'
-        . '<th>日付</th><th style="text-align:right;">純利益のコンセンサス比</th><th style="text-align:right;">営業利益のコンセンサス比</th><th>決算日</th>'
+        . '<th>日付</th><th style="text-align:right;">純利益のコンセンサス比</th><th style="text-align:right;">営業利益のコンセンサス比</th><th title="コンセンサス比の元になった決算の発表日">サプライズの決算日</th>'
         . '<th style="text-align:right;">予想EPS 30日</th><th style="text-align:right;">予想EPS 90日</th><th style="text-align:right;">決算まで</th>'
         . '<th style="text-align:right;">52週の位置</th><th style="text-align:right;">高値から</th><th style="text-align:right;">OBV 20日</th><th style="text-align:right;">MFI</th><th style="text-align:right;">出来高比</th><th style="text-align:right;">ATR%</th></tr></thead><tbody>';
     foreach ($rows as $r) {
