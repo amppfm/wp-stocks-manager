@@ -113,6 +113,21 @@ function wp_stocks_index_history_run_all() {
     return ['ok' => $ok, 'fail' => $fail];
 }
 
+// 日本の指数・ETFだけを更新（日本の引け後の夕方cron用）。.T のETFと日経平均が対象
+function wp_stocks_index_history_run_jp() {
+    wp_stocks_index_history_ensure_table();
+    $ok = 0; $fail = 0;
+    foreach (array_keys(wp_stocks_index_history_symbols()) as $symbol) {
+        if (substr($symbol, -2) !== '.T' && $symbol !== '^N225') continue;
+        $range = wp_stocks_index_history_count($symbol) < 200 ? '2y' : '3mo';
+        $saved = wp_stocks_index_history_fetch_and_save($symbol, $range);
+        if ($saved === false) $fail++; else $ok++;
+        usleep(300000);
+    }
+    wp_stocks_log($fail ? 'error' : 'info', 'index_history', 'JP', "日本の指数履歴の夕方更新：成功 {$ok} / 失敗 {$fail}");
+    return ['ok' => $ok, 'fail' => $fail];
+}
+
 // --------------------------------------------------
 // 日次cron（毎朝7:00 JST。米国引け後）。自己登録・自己解除
 // --------------------------------------------------
@@ -130,8 +145,24 @@ add_action('wp_stocks_index_history_cron', function () {
     wp_stocks_index_history_run_all();
 });
 
+// 夕方cron（毎日17:00 JST。日本の引け後）：夜23:30の判定記録で、日本の指数・業種ETFが当日の終値になるようにする。
+// 米国は夜の時点ではまだ日中の途中なので、ここでは取らない（米国は朝7:00の分で確定する）
+add_action('init', function () {
+    if (wp_next_scheduled('wp_stocks_index_history_jp_cron')) return;
+    $tz   = new DateTimeZone('Asia/Tokyo');
+    $next = new DateTime('today 17:00:00', $tz);
+    if ($next->getTimestamp() <= time()) $next->modify('+1 day');
+    wp_schedule_event($next->getTimestamp(), 'daily', 'wp_stocks_index_history_jp_cron');
+});
+
+add_action('wp_stocks_index_history_jp_cron', function () {
+    @set_time_limit(300);
+    wp_stocks_index_history_run_jp();
+});
+
 register_deactivation_hook(WP_STOCKS_PLUGIN_FILE, function () {
     wp_clear_scheduled_hook('wp_stocks_index_history_cron');
+    wp_clear_scheduled_hook('wp_stocks_index_history_jp_cron');
 });
 
 // --------------------------------------------------
@@ -210,8 +241,11 @@ function wp_stocks_render_index_history_panel() {
     ], admin_url('admin-post.php'));
 
     $next_ts = wp_next_scheduled('wp_stocks_index_history_cron');
+    $next_jp = wp_next_scheduled('wp_stocks_index_history_jp_cron');
     echo '<p style="color:#666;font-size:13px;">日次の自動更新：'
         . ($next_ts ? '次回 ' . esc_html(wp_date('Y-m-d H:i', $next_ts, new DateTimeZone('Asia/Tokyo'))) . '（日本時間）' : '未登録')
+        . ' ／ 日本の指数・ETFの夕方更新：'
+        . ($next_jp ? '次回 ' . esc_html(wp_date('Y-m-d H:i', $next_jp, new DateTimeZone('Asia/Tokyo'))) : '未登録')
         . ' ／ 取得元：Yahoo!ファイナンス</p>';
     echo '<p><a href="' . esc_url($backfill_url) . '" class="button" onclick="return confirm(\'登録されている指数・ETFの約2年分をYahooから取得します（数分かかります）。よろしいですか？\');">'
         . '&#x1F504; 指数の履歴を今すぐ取得（約2年分）</a></p>';
