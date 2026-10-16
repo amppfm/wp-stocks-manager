@@ -167,6 +167,9 @@ function wp_stocks_jh_record_stock($stock, $date = null) {
         'news_score' => $news_score, 'news_detail' => $news_detail,
         'sector_code' => $sector_code, 'price' => $price, 'updated_at' => $now,
     ];
+    // 評価の履歴（予想EPSなど）を先に記録する（下の判定の材料「EPS修正」が、今日の分も含めて計算できるように）
+    wp_stocks_jh_record_valuation($stock, $date);
+
     // 判定の材料（決算サプライズ、EPS修正、決算接近、52週の位置、資金流入、値動きの大きさ）
     if (function_exists('wp_stocks_jf_collect')) $row = array_merge($row, wp_stocks_jf_collect($stock));
     $t = wp_stocks_jh_table();
@@ -175,6 +178,51 @@ function wp_stocks_jh_record_stock($stock, $date = null) {
         $wpdb->update($t, $row, ['id' => $id]);
     } else {
         $wpdb->insert($t, array_merge($row, ['stock_id' => (int)$stock->id, 'judgment_date' => $date, 'created_at' => $now]));
+    }
+    return true;
+}
+
+// 評価の履歴（stock_valuation_history）：予想EPSの修正率（judgment-factors.php）の元データ。1日1行、同じ日は上書き。
+// 予想EPS＝stocks.forward_eps（手入力 → J-Quants → Yahoo/TDnet の順で決まった、画面に出ている予想EPS）。
+// 予想EPSが無い日は記録しない（0を残すと修正率が壊れるため）。
+function wp_stocks_jh_record_valuation($stock, $date = null) {
+    global $wpdb;
+    $t = $wpdb->prefix . 'stock_valuation_history';
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $t)) !== $t) return false;
+    $feps = (float)($stock->forward_eps ?? 0);
+    if ($feps <= 0) return false;
+    $date = $date ?: wp_stocks_jh_today();
+
+    $price = $wpdb->get_var($wpdb->prepare("SELECT price FROM {$wpdb->prefix}stock_prices WHERE stock_id = %d ORDER BY datetime DESC LIMIT 1", $stock->id));
+    $price = ($price !== null && (float)$price > 0) ? (float)$price : null;
+
+    $actual = null;
+    if (function_exists('wp_stocks_get_effective_eps_actual')) {
+        $ea = wp_stocks_get_effective_eps_actual($stock);
+        if ((float)($ea['value'] ?? 0) > 0) $actual = (float)$ea['value'];
+    }
+
+    if (($stock->currency ?? 'JPY') === 'USD')                    $src = 'yahoo';
+    elseif ((float)($stock->manual_forecast_eps ?? 0) > 0)       $src = 'manual';
+    elseif ((float)($stock->jquants_forecast_eps ?? 0) > 0)      $src = 'jquants';
+    else                                                          $src = 'other';
+
+    $row = [
+        'price'          => $price,
+        'actual_eps'     => $actual,
+        'forecast_eps'   => $feps,
+        'bps'            => (float)($stock->jquants_bps ?? 0) > 0 ? (float)$stock->jquants_bps : null,
+        'actual_per'     => ($price !== null && $actual !== null) ? round($price / $actual, 2) : null,
+        'forecast_per'   => $price !== null ? round($price / $feps, 2) : null,
+        'pbr'            => (float)($stock->pbr ?? 0) > 0 ? (float)$stock->pbr : null,
+        'dividend_yield' => (float)($stock->dividend_yield ?? 0) > 0 ? (float)$stock->dividend_yield : null,
+        'eps_source'     => $src,
+    ];
+    $id = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$t} WHERE stock_id = %d AND record_date = %s", $stock->id, $date));
+    if ($id) {
+        $wpdb->update($t, $row, ['id' => $id]);
+    } else {
+        $wpdb->insert($t, array_merge($row, ['stock_id' => (int)$stock->id, 'record_date' => $date]));
     }
     return true;
 }
