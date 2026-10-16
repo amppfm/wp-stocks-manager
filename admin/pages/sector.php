@@ -50,7 +50,7 @@ function wp_stocks_sector_accumulate(&$bucket, $sector_ja, $s, $score_data, $tec
 function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
     global $wpdb;
 
-    $tab      = in_array($_GET['tab'] ?? '', ['jp', 'us', 'portfolio', 'etf', 'calendar', 'period']) ? $_GET['tab'] : 'jp';
+    $tab      = in_array($_GET['tab'] ?? '', ['jp', 'us', 'portfolio', 'etf', 'calendar']) ? $_GET['tab'] : 'jp';
     $base_url = $custom_base_url ?: admin_url('admin.php?page=wp-stocks-sector');
 
     $stocks    = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE is_sector_etf = 0 ORDER BY sector, id");
@@ -334,7 +334,6 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
         'portfolio' => '&#x1F4C1; ポートフォリオ（' . array_sum(array_map(fn($d) => count($d['stocks']), $pf_sectors)) . '銘柄）',
         'etf'       => '&#x1F3C6; ランキング',
         'calendar'  => '&#x1F4C5; カレンダー',
-        'period'    => '&#x23F1;&#xFE0F; 期間別',
     ] as $key => $label) {
         $active = $tab === $key;
         $url    = $base_url . '&tab=' . $key;
@@ -501,55 +500,6 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
                     $style = $cell_style($pct);
                     $disp  = $pct !== null ? number_format($pct, 2) . '%' : '';
                     echo '<td style="padding:4px;text-align:center;border:1px solid #eee;background:' . $style['bg'] . ';color:' . $style['fg'] . ';">' . esc_html($disp) . '</td>';
-                }
-                echo '</tr>';
-            }
-            echo '</table></div>';
-        }
-    } elseif ($tab === 'period') {
-        // TOPIX-17業種別 期間別騰落率（1日/5日/1ヶ月/2ヶ月/6ヶ月/1年）。データ不足の期間は「-」表示
-        $etf_history = wp_stocks_get_etf_price_history($etf_stocks, 400);
-        if (empty($etf_stocks)) {
-            echo '<p style="color:#888;padding:20px;">データがありません。</p>';
-        } else {
-            $topix17_map = wp_stocks_get_topix17_sector_map();
-            $periods = ['1日' => 1, '5日' => 5, '1ヶ月' => 21, '2ヶ月' => 42, '6ヶ月' => 126, '1年' => 252];
-
-            echo '<div style="overflow-x:auto;">';
-            echo '<table style="border-collapse:collapse;width:100%;font-size:13px;">';
-            echo '<tr style="background:#222;color:#fff;">';
-            echo '<th style="padding:8px 12px;text-align:left;">業種</th>';
-            foreach (array_keys($periods) as $label) {
-                echo '<th style="padding:8px 12px;text-align:right;">' . esc_html($label) . '</th>';
-            }
-            echo '</tr>';
-
-            foreach ($etf_stocks as $i => $s) {
-                $name   = $topix17_map[$s->code]['name'] ?? $s->name;
-                $short  = str_replace('NF・', '', $name);
-                $series = $etf_history[$s->id] ?? [];
-                $n      = count($series);
-                $row_bg = $i % 2 === 0 ? '#fff' : '#f9f9f9';
-
-                echo '<tr style="background:' . $row_bg . ';">';
-                echo '<td style="padding:8px 12px;border-bottom:1px solid #eee;font-weight:bold;">' . esc_html($short) . '</td>';
-
-                foreach ($periods as $back) {
-                    $pct = null;
-                    if ($n > 0) {
-                        $latest = $series[$n - 1];
-                        $idx    = $n - 1 - $back;
-                        if ($idx >= 0 && $series[$idx]['price'] > 0) {
-                            $pct = ($latest['price'] - $series[$idx]['price']) / $series[$idx]['price'] * 100;
-                        }
-                    }
-                    if ($pct === null) {
-                        echo '<td style="padding:8px 12px;text-align:right;border-bottom:1px solid #eee;color:#ccc;">-</td>';
-                    } else {
-                        $color = $pct >= 0 ? '#1e7e34' : '#c0392b';
-                        $sign  = $pct >= 0 ? '+' : '';
-                        echo '<td style="padding:8px 12px;text-align:right;border-bottom:1px solid #eee;color:' . $color . ';font-weight:bold;">' . $sign . number_format($pct, 2) . '%</td>';
-                    }
                 }
                 echo '</tr>';
             }

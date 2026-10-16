@@ -342,10 +342,14 @@ function wp_stocks_market_score($stock) {
 // --------------------------------------------------
 // マーケット情報「指数」タブ：相場スコアの確認用の表（ウォッチ・保有の全銘柄、合成点の高い順）
 // --------------------------------------------------
-function wp_stocks_render_market_score_panel() {
+// $market: 'jp'（日本株のみ）／'us'（米国株のみ）／null（すべて）
+function wp_stocks_render_market_score_panel($market = null) {
     global $wpdb;
+    $cur_sql = '';
+    if ($market === 'us')      $cur_sql = " AND currency = 'USD'";
+    elseif ($market === 'jp')  $cur_sql = " AND (currency IS NULL OR currency <> 'USD')";
     $stocks = $wpdb->get_results(
-        "SELECT * FROM {$wpdb->prefix}stocks WHERE is_sector_etf = 0 AND status IN ('watch','portfolio') ORDER BY code ASC"
+        "SELECT * FROM {$wpdb->prefix}stocks WHERE is_sector_etf = 0 AND status IN ('watch','portfolio'){$cur_sql} ORDER BY code ASC"
     );
 
     $rows = [];
@@ -375,10 +379,14 @@ function wp_stocks_render_market_score_panel() {
     echo '<div style="margin-top:35px;">';
     echo '<h3>&#x1F9ED; 相場スコア（確認用）</h3>';
     echo '<div style="background:#f8f9fa;border:1px solid #e3e3e3;padding:8px 12px;margin-bottom:8px;">'
-        . $regime_line('地合い（日本株）', wp_stocks_ms_regime(false))
-        . $regime_line('地合い（米国株）', wp_stocks_ms_regime(true)) . '</div>';
-    echo '<p style="color:#666;font-size:13px;">業種＝業種ETFの騰落率 − 市場の騰落率（日本株：TOPIX-17のETF − TOPIX連動ETF、米国株：SPDRセクターETF − S&amp;P500。ポイント差を±1に換算、1ヶ月0.3・2ヶ月0.3・6ヶ月0.4）。'
-        . ' 地合い＝TOPIX（米国株はS&amp;P500）の25日線・75日線とVIXで 良＋1／中立0／悪−1。'
+        . ($market !== 'us' ? $regime_line('地合い（日本株）', wp_stocks_ms_regime(false)) : '')
+        . ($market !== 'jp' ? $regime_line('地合い（米国株）', wp_stocks_ms_regime(true)) : '') . '</div>';
+    $sector_txt = $market === 'jp' ? '日本株：TOPIX-17のETF − TOPIX連動ETF'
+                : ($market === 'us' ? '米国株：SPDRセクターETF − S&amp;P500'
+                : '日本株：TOPIX-17のETF − TOPIX連動ETF、米国株：SPDRセクターETF − S&amp;P500');
+    $regime_txt = $market === 'jp' ? 'TOPIX' : ($market === 'us' ? 'S&amp;P500' : 'TOPIX（米国株はS&amp;P500）');
+    echo '<p style="color:#666;font-size:13px;">業種＝業種ETFの騰落率 − 市場の騰落率（' . $sector_txt . '。ポイント差を±1に換算、1ヶ月0.3・2ヶ月0.3・6ヶ月0.4）。'
+        . ' 地合い＝' . $regime_txt . 'の25日線・75日線とVIXで 良＋1／中立0／悪−1。'
         . ' 相場スコア（参考）＝業種と地合いを0.5ずつで平均したものを85%、テーマ（株探タグ。一致したタグの数で重みづけ）を15%で混ぜた値。</p>';
 
     echo '<div style="max-height:640px;overflow:auto;border:1px solid #ddd;"><table style="border-collapse:collapse;background:#fff;min-width:980px;width:100%;font-size:13px;"><thead><tr style="background:#f8f9fa;position:sticky;top:0;">';

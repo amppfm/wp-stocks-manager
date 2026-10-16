@@ -441,12 +441,27 @@ function wp_stocks_market_info_page() {
             wp_stocks_render_news_feed_list($news_sources[$ntab]['url'], 20);
         }
     } elseif ($active_tab === 'index') {
-        wp_stocks_render_market_indices();
-        wp_stocks_render_index_period_table();
-        wp_stocks_render_index_period_table(wp_stocks_theme_reference_groups(), '&#x1F3AF; テーマ・基準指数の期間別騰落率');
-        wp_stocks_render_theme_stock_panel();
-        wp_stocks_render_market_score_panel();
-        wp_stocks_render_index_history_panel();
+        // 指数タブの中を、日本株／米国株のサブタブに分ける（分け方は wp_stocks_market_region_defs）
+        $regions = wp_stocks_market_region_defs();
+        $itab    = sanitize_text_field($_GET['itab'] ?? 'jp');
+        if (!isset($regions[$itab])) $itab = 'jp';
+
+        echo '<div style="margin-bottom:15px;display:flex;gap:8px;flex-wrap:wrap;">';
+        foreach ($regions as $rkey => $rdef) {
+            $itab_url = admin_url('admin.php?page=wp-stocks-market&mtab=index&itab=' . $rkey);
+            echo '<a href="' . esc_url($itab_url) . '" style="padding:6px 16px;border-radius:4px;text-decoration:none;font-size:13px;font-weight:bold;'
+                . ($itab === $rkey ? 'background:#0073aa;color:#fff;' : 'background:#f0f0f0;color:#555;border:1px solid #ddd;') . '">'
+                . esc_html($rdef['label']) . '</a>';
+        }
+        echo '</div>';
+
+        wp_stocks_render_market_indices(wp_stocks_market_region_groups($itab, 'index'));
+        wp_stocks_render_index_period_table(wp_stocks_market_region_groups($itab, 'index'), null, true);
+        if ($itab === 'jp') wp_stocks_render_index_period_table(wp_stocks_topix17_period_groups(), '&#x1F3ED; TOPIX-17業種別の期間別騰落率', false);   // ヒートマップの「期間別」から移動
+        wp_stocks_render_index_period_table(wp_stocks_market_region_groups($itab, 'theme'), '&#x1F3AF; テーマ・基準指数の期間別騰落率', false);
+        if ($itab === 'jp') wp_stocks_render_theme_stock_panel();   // 株探のテーマタグ＝日本株のみ
+        wp_stocks_render_market_score_panel($itab);
+        wp_stocks_render_index_history_panel($itab);
     } elseif ($active_tab === 'overall') {
         wp_stocks_render_overall_judgment_panel('jp');
     } elseif ($active_tab === 'overall_us') {

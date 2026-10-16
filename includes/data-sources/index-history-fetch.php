@@ -215,7 +215,8 @@ add_action('admin_post_wp_stocks_index_history_backfill', function () {
 // --------------------------------------------------
 // マーケット情報「指数」タブの下に出す：履歴の保存状況＋取得ボタン
 // --------------------------------------------------
-function wp_stocks_render_index_history_panel() {
+// $region: 'jp'／'us'（その側の指数だけ表の対象にする）。省略時は全部
+function wp_stocks_render_index_history_panel($region = null) {
     global $wpdb;
     wp_stocks_index_history_ensure_table();
 
@@ -253,7 +254,8 @@ function wp_stocks_render_index_history_panel() {
     echo '<table class="widefat striped" style="max-width:760px;"><thead><tr>'
         . '<th>指数</th><th>コード</th><th style="text-align:right;">件数</th><th>最古</th><th>最新</th></tr></thead><tbody>';
     $today_ts = time();
-    foreach (wp_stocks_index_history_symbols() as $symbol => $label) {
+    $hist_symbols = ($region !== null && function_exists('wp_stocks_market_region_symbols')) ? wp_stocks_market_region_symbols($region) : wp_stocks_index_history_symbols();
+    foreach ($hist_symbols as $symbol => $label) {
         $s = $stats[$symbol] ?? null;
         $stale = $s && (($today_ts - strtotime($s->newest)) > 5 * DAY_IN_SECONDS);
         echo '<tr><td>' . esc_html($label) . '</td><td>' . esc_html($symbol) . '</td>';

@@ -34,12 +34,25 @@ function wp_stocks_index_period_returns($symbol) {
     return $out;
 }
 
+// TOPIX-17業種ETF（1617〜1633）の、期間別騰落率の表に渡すグループ。ヒートマップの「期間別」から、指数タブへ移動した分
+function wp_stocks_topix17_period_groups() {
+    $items = [];
+    if (function_exists('wp_stocks_get_topix17_sector_map')) {
+        foreach (wp_stocks_get_topix17_sector_map() as $code => $d) {
+            $items[] = ['label' => str_replace('NF・', '', $d['name']), 'symbol' => $code . '.T'];
+        }
+    }
+    return $items ? ['TOPIX-17業種ETF' => $items] : [];
+}
+
 // --------------------------------------------------
 // マーケット情報「指数」タブ：期間別騰落率の表（グループ別）
 // 色は同じタブの指数カードに合わせる（上昇=赤・下落=青）
 // --------------------------------------------------
-function wp_stocks_render_index_period_table($groups = null, $title = null) {
+// $is_index: 注記の種類（true=指数・為替の注記、false=ETFの注記）。省略時は $groups が null かどうかで決める
+function wp_stocks_render_index_period_table($groups = null, $title = null, $is_index = null) {
     $periods = array_keys(wp_stocks_index_period_defs());
+    if ($is_index === null) $is_index = ($groups === null);
 
     echo '<div style="margin-top:35px;">';
     echo '<h3>' . ($title !== null ? $title : '&#x1F4CA; 期間別騰落率') . '</h3>';
@@ -86,7 +99,7 @@ function wp_stocks_render_index_period_table($groups = null, $title = null) {
     }
     echo '</tr></thead><tbody>' . $body . '</tbody></table></div>';
     echo '<p style="color:#888;font-size:12px;margin-top:6px;">日次履歴の終値で計算（期間は営業日数：1日=1、5日=5、1ヶ月=21、2ヶ月=42、6ヶ月=126、1年=252）。'
-        . ($groups === null
+        . ($is_index
             ? '為替・先物は当日分が途中の値です。VIXと米国債10年利回りは値そのものの変化率です。'
             : '上場から日が浅いETFは、履歴が足りない期間が「-」になります。')
         . '</p>';

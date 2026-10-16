@@ -43,6 +43,47 @@ function wp_stocks_get_market_index_groups() {
 }
 
 // --------------------------------------------------
+// マーケット情報「指数」タブの、日本株／米国株の分け方（サブタブ）
+//   index_groups : wp_stocks_get_market_index_groups() のグループ名
+//   theme_groups : wp_stocks_theme_reference_groups() のグループ名
+// 「海外」（欧州・アジア）は日本株側に置いている。米国株側に移すときは、index_groups の配列を入れ替える。
+// --------------------------------------------------
+function wp_stocks_market_region_defs() {
+    return [
+        'jp' => ['label' => '日本株', 'index_groups' => ['日本', '海外'], 'theme_groups' => ['基準指数', 'テーマETF（日本）']],
+        'us' => ['label' => '米国株', 'index_groups' => ['米国'],         'theme_groups' => ['米国セクターETF（SPDR）', 'テーマETF（米国）']],
+    ];
+}
+
+// $kind: 'index'（指数・為替）／'theme'（テーマ・基準指数）。該当グループだけを返す
+function wp_stocks_market_region_groups($region, $kind) {
+    $defs = wp_stocks_market_region_defs();
+    if (!isset($defs[$region])) return [];
+    if ($kind === 'theme') {
+        $all  = function_exists('wp_stocks_theme_reference_groups') ? wp_stocks_theme_reference_groups() : [];
+        $keys = $defs[$region]['theme_groups'];
+    } else {
+        $all  = wp_stocks_get_market_index_groups();
+        $keys = $defs[$region]['index_groups'];
+    }
+    return array_intersect_key($all, array_flip($keys));
+}
+
+// 履歴の状況表用：その側の [symbol => label]。日本株側にはTOPIX-17業種ETFも含める
+function wp_stocks_market_region_symbols($region) {
+    $list = [];
+    foreach (['index', 'theme'] as $kind) {
+        foreach (wp_stocks_market_region_groups($region, $kind) as $items) {
+            foreach ($items as $item) $list[$item['symbol']] = $item['label'];
+        }
+    }
+    if ($region === 'jp' && function_exists('wp_stocks_get_topix17_sector_map')) {
+        foreach (wp_stocks_get_topix17_sector_map() as $code => $d) $list[$code . '.T'] = $d['name'];
+    }
+    return $list;
+}
+
+// --------------------------------------------------
 // マーケット情報ページ：指数データ取得（10分キャッシュ）
 // --------------------------------------------------
 function wp_stocks_fetch_index_quote($symbol) {
@@ -90,8 +131,9 @@ function wp_stocks_index_change_html($price, $previous_close) {
         . '</span>';
 }
 
-function wp_stocks_render_market_indices() {
-    $groups = wp_stocks_get_market_index_groups();
+// $groups: 表示するグループ（wp_stocks_market_region_groups の結果）。省略時は全グループ
+function wp_stocks_render_market_indices($groups = null) {
+    if ($groups === null) $groups = wp_stocks_get_market_index_groups();
     $group_links = [
         '日本' => 'https://nikkei225jp.com/',
         '米国' => 'https://nikkei225jp.com/nasdaq/',
