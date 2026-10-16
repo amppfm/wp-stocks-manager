@@ -146,6 +146,23 @@ function wp_stocks_render_tachibana_news_tab() {
     $per = 100;
     $base = admin_url('admin.php?page=wp-stocks-market&mtab=tcnews');
 
+    // 表示の切り替え: ニュース一覧 / 未登録（発掘）
+    $tview = (sanitize_text_field($_GET['tview'] ?? '') === 'disc') ? 'disc' : 'list';
+    echo '<div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">';
+    foreach (['list' => '&#x1F4F0; ニュース一覧', 'disc' => '&#x1F50D; 未登録（発掘）'] as $vk => $vl) {
+        echo '<a href="' . esc_url(add_query_arg(['tview' => $vk], $base)) . '" style="padding:6px 14px;border-radius:4px;text-decoration:none;font-size:13px;font-weight:bold;'
+            . ($tview === $vk ? 'background:#0073aa;color:#fff;' : 'background:#f0f0f0;color:#555;border:1px solid #ddd;') . '">' . $vl . '</a>';
+    }
+    echo '</div>';
+    if ($tview === 'disc') {
+        if (function_exists('wp_stocks_nws_render_discovery')) {
+            wp_stocks_nws_render_discovery($base);
+        } else {
+            echo '<p style="color:#888;">ニュース加減点の機能が読み込まれていません。</p>';
+        }
+        return;
+    }
+
     $btn = function ($label, $url, $active) {
         return '<a href="' . esc_url($url) . '" style="padding:6px 14px;border-radius:4px;text-decoration:none;font-size:13px;'
             . ($active ? 'background:#0073aa;color:#fff;font-weight:bold;' : 'background:#f0f0f0;color:#555;border:1px solid #ddd;')

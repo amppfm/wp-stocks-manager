@@ -1312,9 +1312,6 @@ function wp_stocks_nws_page($embedded = false) {
     // ---- ランキング ----
     wp_stocks_nws_render_ranking($show_all, false);
 
-    // ---- 発掘（未登録銘柄のニュース加点） ----
-    wp_stocks_nws_render_discovery();
-
     // ---- 手動登録 ----
     wp_stocks_nws_render_manual(false);
 
@@ -1460,7 +1457,7 @@ function wp_stocks_nws_discovery_list($min = 3.0, $days = 14) {
     return $list;
 }
 
-function wp_stocks_nws_render_discovery() {
+function wp_stocks_nws_render_discovery($base = '') {
     $min  = (isset($_GET['dmin']) && is_numeric($_GET['dmin'])) ? max(0.5, (float)$_GET['dmin']) : 3.0;
     $list = wp_stocks_nws_discovery_list($min);
     $max_rows = 100;
@@ -1471,7 +1468,7 @@ function wp_stocks_nws_render_discovery() {
     foreach ([2, 3, 4] as $m) {
         $links[] = ((float)$m === $min)
             ? '<strong>' . $m . '点</strong>'
-            : '<a href="' . esc_url(wp_stocks_nws_tab_url(['dmin' => $m])) . '">' . $m . '点</a>';
+            : '<a href="' . esc_url($base !== '' ? add_query_arg(['tview' => 'disc', 'dmin' => $m], $base) : wp_stocks_nws_tab_url(['dmin' => $m])) . '">' . $m . '点</a>';
     }
     echo implode(' / ', $links) . '（' . intval(count($list)) . '銘柄）</p>';
 
