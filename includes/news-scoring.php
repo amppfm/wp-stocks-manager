@@ -1312,6 +1312,9 @@ function wp_stocks_nws_page($embedded = false) {
     // ---- ランキング ----
     wp_stocks_nws_render_ranking($show_all, false);
 
+    // ---- 発掘（未登録銘柄のニュース加点） ----
+    wp_stocks_nws_render_discovery();
+
     // ---- 手動登録 ----
     wp_stocks_nws_render_manual(false);
 
@@ -1365,4 +1368,133 @@ function wp_stocks_nws_page($embedded = false) {
         echo '</tbody></table>';
     }
     echo '</div>';
+}
+
+// =====================================================================
+// 発掘：未登録銘柄のニュース加点
+//   stock_news_events を読むだけ（保存は増やさない）。
+//   登録（stocks）に無い銘柄の加点を、営業日の減衰後の点数で並べる。
+//   同じ銘柄は最大の1件。加点のみ。TOB対象と赤字幅の縮小は除く。
+// =====================================================================
+
+// 見出しから社名を取り出す。
+// 例: "<決算>キャリアリンク (6070) 上方修正 ..." / "<TDnet>AI: 東洋電(6505) 1Q決算発表 ..."
+function wp_stocks_nws_disc_name($headline, $code) {
+    $h = mb_convert_kana((string)$headline, 'as', 'UTF-8');
+    $h = preg_replace('/^<[^>]+>\s*/u', '', $h);
+    $h = preg_replace('/^AI:\s*/u', '', $h);
+    $pos = mb_strpos($h, '(' . $code . ')');
+    if ($pos === false || $pos === 0) return '';
+    return trim(mb_substr($h, 0, $pos));
+}
+
+function wp_stocks_nws_disc_group_label($group) {
+    $g = (string)$group;
+    if (strpos($g, 'custom:') === 0) return '自作';
+    $map = [
+        'earnings'          => '業績',
+        'earnings_score'    => '決算スコア',
+        'earnings_surprise' => '決算サプライズ',
+        'dividend'          => '配当',
+        'buyback'           => '自社株買い',
+        'tob'               => 'TOB',
+        'alliance'          => '提携',
+        'special'           => '特別損益',
+        'dilution'          => '希薄化',
+        'material'          => '材料',
+        'risk'              => 'リスク',
+        'index'             => '指数',
+        'split'             => '株式分割',
+    ];
+    return $map[$g] ?? $g;
+}
+
+// 営業損失の縮小（▲同士の比較）を「上方修正」と数えていないか。
+// 例: "営業損失(▲5,000万円←▲1.33億円 2026/11通期連結)"
+function wp_stocks_nws_disc_is_loss_shrink($headline) {
+    $h = mb_convert_kana((string)$headline, 'as', 'UTF-8');
+    return (bool)preg_match('/\((?:▲|-)[^←)]*←(?:▲|-)/u', $h);
+}
+
+// 戻り値: 点数の高い順の配列。各要素は code, name, group, eff, reason, date, headline
+function wp_stocks_nws_discovery_list($min = 3.0, $days = 14) {
+    global $wpdb;
+    wp_stocks_nws_ensure_table();
+    $ev_t  = wp_stocks_nws_events_table();
+    $since = (new DateTime('today', new DateTimeZone('Asia/Tokyo')))->modify('-' . (int)$days . ' days')->format('Y-m-d');
+    $rows  = $wpdb->get_results($wpdb->prepare(
+        "SELECT e.* FROM {$ev_t} e
+         LEFT JOIN {$wpdb->prefix}stocks s ON REPLACE(s.code, '.T', '') = e.code
+         WHERE e.source = 'auto' AND s.id IS NULL AND e.points > 0 AND e.event_date >= %s",
+        $since
+    ), ARRAY_A);
+
+    $best = [];
+    foreach ((array)$rows as $r) {
+        $type = (string)$r['event_type'];
+        if ($type === 'tob_target') continue;
+        if (in_array($type, ['rev_up', 'rev_up_small'], true) && wp_stocks_nws_disc_is_loss_shrink($r['headline'])) continue;
+        $bd = wp_stocks_nws_bdays_since($r['event_date']);
+        $w  = wp_stocks_nws_decay($bd, $type);
+        if ($w <= 0.0) continue;
+        $eff = (float)$r['points'] * $w;
+        if ($eff < $min) continue;
+        $code = (string)$r['code'];
+        if (!isset($best[$code]) || $eff > $best[$code]['eff']) {
+            $best[$code] = [
+                'code'     => $code,
+                'name'     => wp_stocks_nws_disc_name($r['headline'], $code),
+                'group'    => wp_stocks_nws_disc_group_label($r['event_group']),
+                'eff'      => $eff,
+                'reason'   => (string)$r['reason'],
+                'date'     => (string)$r['event_date'],
+                'headline' => (string)$r['headline'],
+            ];
+        }
+    }
+    $list = array_values($best);
+    usort($list, function ($a, $b) {
+        if ($a['eff'] != $b['eff']) return $b['eff'] <=> $a['eff'];
+        return strcmp($b['date'], $a['date']);
+    });
+    return $list;
+}
+
+function wp_stocks_nws_render_discovery() {
+    $min  = (isset($_GET['dmin']) && is_numeric($_GET['dmin'])) ? max(0.5, (float)$_GET['dmin']) : 3.0;
+    $list = wp_stocks_nws_discovery_list($min);
+    $max_rows = 100;
+
+    echo '<h2 style="margin-top:30px;">&#x1F50D; 発掘（未登録銘柄のニュース加点）</h2>';
+    echo '<p class="description">登録銘柄に入っていない銘柄の、直近のニュース加点です（加点のみ・営業日の経過で減衰・同じ銘柄は最大の1件）。赤字幅の縮小とTOB対象は除いています。下限: ';
+    $links = [];
+    foreach ([2, 3, 4] as $m) {
+        $links[] = ((float)$m === $min)
+            ? '<strong>' . $m . '点</strong>'
+            : '<a href="' . esc_url(wp_stocks_nws_tab_url(['dmin' => $m])) . '">' . $m . '点</a>';
+    }
+    echo implode(' / ', $links) . '（' . intval(count($list)) . '銘柄）</p>';
+
+    if (!$list) {
+        echo '<p>該当する未登録銘柄はありません。</p>';
+        return;
+    }
+    echo '<table class="widefat striped" style="max-width:1100px;font-size:12px;"><thead><tr>'
+       . '<th style="width:70px;">コード</th><th style="width:170px;">銘柄</th><th style="width:100px;">区分</th>'
+       . '<th style="width:60px;">スコア</th><th style="width:90px;">日付</th><th>主な理由</th>'
+       . '</tr></thead><tbody>';
+    foreach (array_slice($list, 0, $max_rows) as $row) {
+        $pt = '+' . rtrim(rtrim(number_format((float)$row['eff'], 1), '0'), '.');
+        echo '<tr title="' . esc_attr($row['headline']) . '">'
+           . '<td>' . esc_html($row['code']) . '</td>'
+           . '<td>' . esc_html($row['name'] !== '' ? $row['name'] : '-') . '</td>'
+           . '<td>' . esc_html($row['group']) . '</td>'
+           . '<td>' . esc_html($pt) . '</td>'
+           . '<td>' . esc_html(substr($row['date'], 5)) . '</td>'
+           . '<td>' . esc_html($row['reason']) . '</td></tr>';
+    }
+    echo '</tbody></table>';
+    if (count($list) > $max_rows) {
+        echo '<p class="description" style="margin:4px 0 0;">上位' . intval($max_rows) . '件を表示しています（全' . intval(count($list)) . '銘柄）。</p>';
+    }
 }
