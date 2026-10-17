@@ -5,7 +5,8 @@
  * 業種ETF17本（1617.T〜1633.T）と TOPIX連動ETF（1306.T）の日足履歴
  * （wp_stock_index_history）だけを使い、
  *   「相対強度スコア」→「その後の超過リターン（業種ETF − 1306.T）」
- * のずれを確認する。管理画面 ツール > セクター検証 に表示する。
+ * のずれを確認する。管理画面 Stocks > 設定 の「セクター検証」タブに表示する
+ * （admin/pages/settings.php から wp_stocks_sv_render_page(true) を呼ぶ）。
  *
  * 目的は成績の最大化ではなく、スコアと実際の動きが大きくずれていないかの確認。
  * スコアの計算は market-score.php の考え方を再現したもの（下の設定を参照）。
@@ -31,6 +32,7 @@ function wp_stocks_sv_config() {
         'horizons'  => array(5, 20), // 検証する先の営業日数
         'bucket'    => 0.3,          // スコアがこの値以上=上位、以下の負値=下位
         'min_ic_n'  => 8,            // 日ごとの順位相関に必要な最少業種数
+        'jump'      => 25,           // 日次変動(%)がこれを超えたら異常値（分割・データ不良）として除外
     );
 }
 
@@ -110,6 +112,7 @@ function wp_stocks_sv_ranks(array $values) {
         }
         $i = $j + 1;
     }
+    ksort($ranks);
     return $ranks;
 }
 
@@ -160,11 +163,12 @@ function wp_stocks_sv_build() {
     $names   = wp_stocks_sv_sector_names();
     $missing = array();
     $records = array();
+    $jumps   = array();
     $dateSet = array();
     $maxLb   = max(array_keys($cfg['lookbacks']));
 
     if (empty($bench)) {
-        return array('records' => array(), 'dates' => array(), 'missing' => array_keys($names), 'no_bench' => true);
+        return array('records' => array(), 'dates' => array(), 'missing' => array_keys($names), 'jumps' => array(), 'no_bench' => true);
     }
 
     foreach (array_keys($names) as $sym) {
@@ -191,7 +195,23 @@ function wp_stocks_sv_build() {
             $missing[] = $sym;
             continue;
         }
+        // 異常な日次変動（分割・データ不良）を検出。その変動が窓にかかる記録は除外する
+        $cnt = array_fill(0, $n, 0);
+        for ($k = 1; $k < $n; $k++) {
+            $cnt[$k] = $cnt[$k - 1];
+            $ps = ($sc[$k] / $sc[$k - 1] - 1) * 100;
+            $pb = ($bc[$k] / $bc[$k - 1] - 1) * 100;
+            if (abs($ps) > $cfg['jump'] || abs($pb) > $cfg['jump']) {
+                $cnt[$k]++;
+                $who = (abs($ps) > $cfg['jump']) ? $sym : $cfg['bench'];
+                $pct = (abs($ps) > $cfg['jump']) ? $ps : $pb;
+                $jumps[$who . '|' . $d[$k]] = array($who, $d[$k], $pct);
+            }
+        }
         for ($i = $maxLb; $i < $n; $i++) {
+            if ($cnt[$i] - $cnt[$i - $maxLb] > 0) {
+                continue; // スコアの計算窓に異常な変動がある
+            }
             $score = 0.0;
             foreach ($cfg['lookbacks'] as $lb => $p) {
                 $rel = (($sc[$i] / $sc[$i - $lb]) - 1) * 100 - (($bc[$i] / $bc[$i - $lb]) - 1) * 100;
@@ -199,7 +219,7 @@ function wp_stocks_sv_build() {
             }
             $fwd = array();
             foreach ($cfg['horizons'] as $h) {
-                if ($i + $h < $n) {
+                if ($i + $h < $n && $cnt[$i + $h] - $cnt[$i] == 0) {
                     $fwd[$h] = (($sc[$i + $h] / $sc[$i]) - 1) * 100 - (($bc[$i + $h] / $bc[$i]) - 1) * 100;
                 } else {
                     $fwd[$h] = null;
@@ -212,7 +232,17 @@ function wp_stocks_sv_build() {
 
     $dates = array_keys($dateSet);
     sort($dates);
-    return array('records' => $records, 'dates' => $dates, 'missing' => array_values(array_unique($missing)));
+    return array('records' => $records, 'dates' => $dates, 'missing' => array_values(array_unique($missing)), 'jumps' => array_values($jumps));
+}
+
+function wp_stocks_sv_median(array $v) {
+    $n = count($v);
+    if ($n === 0) {
+        return null;
+    }
+    sort($v);
+    $m = intdiv($n, 2);
+    return ($n % 2) ? $v[$m] : ($v[$m - 1] + $v[$m]) / 2;
 }
 
 function wp_stocks_sv_bucket($score) {
@@ -236,6 +266,7 @@ function wp_stocks_sv_aggregate(array $records, $from = null, $to = null) {
     foreach ($cfg['horizons'] as $h) {
         $acc    = array('top' => array(0, 0.0, 0), 'neutral' => array(0, 0.0, 0), 'bottom' => array(0, 0.0, 0));
         $perDay = array();
+        $vals   = array('top' => array(), 'neutral' => array(), 'bottom' => array());
         foreach ($records as $sym => $byIdx) {
             foreach ($byIdx as $r) {
                 if (($from !== null && $r['date'] < $from) || ($to !== null && $r['date'] > $to)) {
@@ -247,6 +278,7 @@ function wp_stocks_sv_aggregate(array $records, $from = null, $to = null) {
                 }
                 $b = wp_stocks_sv_bucket($r['score']);
                 $acc[$b][0]++;
+                $vals[$b][] = $f;
                 $acc[$b][1] += $f;
                 if ($f > 0) {
                     $acc[$b][2]++;
@@ -260,6 +292,7 @@ function wp_stocks_sv_aggregate(array $records, $from = null, $to = null) {
             $row[$b] = array(
                 'n'   => $a[0],
                 'avg' => $a[0] ? $a[1] / $a[0] : null,
+                'med' => wp_stocks_sv_median($vals[$b]),
                 'hit' => $a[0] ? $a[2] / $a[0] : null,
             );
         }
@@ -302,10 +335,11 @@ function wp_stocks_sv_render_summary($title, array $agg) {
     foreach ($agg as $h => $row) {
         echo '<p><strong>' . intval($h) . '営業日後の超過リターン（業種ETF − 1306.T、%）</strong></p>';
         echo '<table class="widefat striped" style="max-width:760px"><thead><tr>'
-            . '<th>スコア帯</th><th>件数</th><th>平均超過</th><th>プラスの割合</th></tr></thead><tbody>';
+            . '<th>スコア帯</th><th>件数</th><th>平均超過</th><th>中央値</th><th>プラスの割合</th></tr></thead><tbody>';
         foreach ($labels as $k => $label) {
             echo '<tr><td>' . esc_html($label) . '</td><td>' . intval($row[$k]['n']) . '</td><td>'
                 . wp_stocks_sv_fmt($row[$k]['avg']) . '</td><td>'
+                . wp_stocks_sv_fmt($row[$k]['med']) . '</td><td>'
                 . wp_stocks_sv_fmt($row[$k]['hit'] === null ? null : $row[$k]['hit'] * 100, 0, '%') . '</td></tr>';
         }
         echo '</tbody></table>';
@@ -363,12 +397,17 @@ function wp_stocks_sv_render_recent(array $records) {
     echo '<p>上位・下位だった業種のうち逆行：' . intval($mismatch) . ' / ' . intval($counted) . '</p>';
 }
 
-function wp_stocks_sv_render_page() {
+function wp_stocks_sv_render_page($embedded = false) {
     if (!current_user_can('manage_options')) {
         return;
     }
     $data = wp_stocks_sv_build();
-    echo '<div class="wrap"><h1>セクター検証</h1>';
+    if ($embedded) {
+        echo '<div class="wp-stocks-sv-embed">';
+        echo '<h2 style="margin-top:0;">&#x1F4CA; セクター検証</h2>';
+    } else {
+        echo '<div class="wrap"><h1>セクター検証</h1>';
+    }
     echo '<p>業種ETF（TOPIX-17）の相対強度スコアが、その後の「業種ETF − 1306.T」の動きとずれていないかを確認します。'
         . '先の期間は重なるため、件数ほどの独立した検証にはなりません。見るのは「方向が合っているか」と「前半・後半で同じか」です。</p>';
 
@@ -379,6 +418,13 @@ function wp_stocks_sv_render_page() {
     if (!empty($data['missing'])) {
         echo '<div class="notice notice-warning"><p>履歴が足りない業種ETF: '
             . esc_html(implode(', ', $data['missing'])) . '</p></div>';
+    }
+    if (!empty($data['jumps'])) {
+        echo '<div class="notice notice-warning"><p>異常な日次変動（分割やデータ不良の疑い。前後の期間は集計から除外しています）：</p><ul style="margin-left:20px;list-style:disc;">';
+        foreach (array_slice($data['jumps'], 0, 20) as $j) {
+            echo '<li>' . esc_html($j[0]) . ' ' . esc_html($j[1]) . '：' . wp_stocks_sv_fmt($j[2], 1, '%') . '</li>';
+        }
+        echo '</ul></div>';
     }
     if (empty($data['dates'])) {
         echo '<p>検証できるデータがありません。</p></div>';
@@ -397,13 +443,3 @@ function wp_stocks_sv_render_page() {
     wp_stocks_sv_render_summary('後半（' . $mid . '〜）', wp_stocks_sv_aggregate($data['records'], $mid, null));
     echo '</div>';
 }
-
-add_action('admin_menu', function () {
-    add_management_page(
-        'セクター検証',
-        'セクター検証',
-        'manage_options',
-        'wp-stocks-sector-validation',
-        'wp_stocks_sv_render_page'
-    );
-});

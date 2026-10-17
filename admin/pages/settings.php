@@ -406,6 +406,7 @@ function wp_stocks_settings_page() {
         'tcn'         => '📡 立花ニュース',
         'nws'         => '📰 ニュース加減点',
         'signal'      => '🎯 複合シグナル判定',
+        'sector'      => '📊 セクター検証',
     ];
     echo '<ul class="wp-stocks-settings-tabs" style="display:flex;gap:0;border-bottom:2px solid #0073aa;margin:0 0 20px 0;padding:0;list-style:none;flex-wrap:wrap;">';
     $wss_first = true;
@@ -496,6 +497,16 @@ function wp_stocks_settings_page() {
         echo '<p>ニュース加減点モジュールが読み込まれていません。</p>';
     }
     echo '</div>'; // end panel: nws
+    echo '<div class="wp-stocks-settings-panel" data-panel="sector" style="display:none;">';
+    if (!function_exists('wp_stocks_sv_render_page')) {
+        echo '<p>セクター検証モジュールが読み込まれていません。</p>';
+    } elseif (($_GET['tab'] ?? '') === 'sector') {
+        wp_stocks_sv_render_page(true);
+    } else {
+        echo '<p class="description">業種ETFの相対強度スコアが、その後の動きとずれていないかを確認します。集計に少し時間がかかるため、ボタンを押したときだけ計算します。</p>';
+        echo '<p><a href="' . esc_url(admin_url('admin.php?page=wp-stocks-settings&tab=sector')) . '" class="button button-primary">セクター検証を表示</a></p>';
+    }
+    echo '</div>'; // end panel: sector
     // ?tab=xxx で指定されたタブを読み込み後に自動で開く（保存後に先頭のタブへ戻らないようにする）
     echo '<script>
     window.addEventListener("load", function () {
