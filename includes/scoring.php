@@ -74,16 +74,30 @@ function wp_stocks_calc_fair_price($stock) {
     return $result;
 }
 
-// 直近の本決算(FY)レコードを新しい順に$limit件取得する（J-Quants由来のみ）
+// 直近の本決算(FY)レコードを新しい順に$limit件取得する。J-Quantsを優先し、
+// まだJ-Quantsに入っていない期は、たちばな経由のTDnet（source='tdnet'）の通期で補う
 function wp_stocks_get_latest_annual_financials($stock_id, $limit = 2) {
     global $wpdb;
     if (empty($stock_id)) return [];
-    return $wpdb->get_results($wpdb->prepare(
+    $limit = max(1, (int)$limit);
+    $rows = $wpdb->get_results($wpdb->prepare(
         "SELECT * FROM {$wpdb->prefix}stock_quarterly_financials
-         WHERE stock_id = %d AND source = 'jquants' AND fiscal_quarter = 4
+         WHERE stock_id = %d AND source IN ('jquants','tdnet') AND fiscal_quarter = 4
          ORDER BY period_end DESC LIMIT %d",
-        $stock_id, $limit
+        $stock_id, $limit * 2
     ));
+    // 同じ期（period_endまたはfiscal_year）がJ-Quantsにあれば、TDnetの行は使わない
+    $jq_end = [];
+    $jq_fy  = [];
+    foreach ($rows as $r) {
+        if ($r->source === 'jquants') { $jq_end[$r->period_end] = true; $jq_fy[$r->fiscal_year] = true; }
+    }
+    $out = [];
+    foreach ($rows as $r) {
+        if ($r->source === 'tdnet' && (isset($jq_end[$r->period_end]) || isset($jq_fy[$r->fiscal_year]))) continue;
+        $out[] = $r;
+    }
+    return array_slice($out, 0, $limit);
 }
 
 // --------------------------------------------------
