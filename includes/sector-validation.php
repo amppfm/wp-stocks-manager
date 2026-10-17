@@ -79,6 +79,48 @@ function wp_stocks_sv_load_series($symbol) {
     return $out;
 }
 
+/**
+ * 異常値の除去。ある日の変動が±jump%を超え、5日以内に元の水準へ戻る場合は
+ * データ不良（一時的な誤値）とみなして、その間の日を取り除く。
+ * 戻らない変動（分割など）はそのまま残す（build() 側で窓ごと除外する）。
+ */
+function wp_stocks_sv_clean_series(array $series, $sym, array &$removed) {
+    $cfg   = wp_stocks_sv_config();
+    $thr   = $cfg['jump'] / 100;
+    $dates = array_keys($series);
+    $vals  = array_values($series);
+    $n     = count($vals);
+    $out   = array();
+    if ($n === 0) {
+        return $out;
+    }
+    $out[$dates[0]] = $vals[0];
+    $prev = $vals[0];
+    $k    = 1;
+    while ($k < $n) {
+        if (abs($vals[$k] / $prev - 1) > $thr) {
+            $back = null;
+            for ($j = $k + 1; $j < $n && $j <= $k + 5; $j++) {
+                if (abs($vals[$j] / $prev - 1) <= $thr) {
+                    $back = $j;
+                    break;
+                }
+            }
+            if ($back !== null) {
+                for ($m = $k; $m < $back; $m++) {
+                    $removed[] = array($sym, $dates[$m], ($vals[$m] / $prev - 1) * 100);
+                }
+                $k = $back;
+                continue;
+            }
+        }
+        $out[$dates[$k]] = $vals[$k];
+        $prev = $vals[$k];
+        $k++;
+    }
+    return $out;
+}
+
 function wp_stocks_sv_sign($rel, $thr) {
     if ($rel >= $thr) {
         return 1;
@@ -155,7 +197,8 @@ function wp_stocks_sv_build() {
     $cfg   = wp_stocks_sv_config();
     $table = $wpdb->prefix . 'stock_index_history';
 
-    $bench = wp_stocks_sv_load_series($cfg['bench']);
+    $removed = array();
+    $bench   = wp_stocks_sv_clean_series(wp_stocks_sv_load_series($cfg['bench']), $cfg['bench'], $removed);
     $syms  = $wpdb->get_col(
         "SELECT DISTINCT symbol FROM {$table}
          WHERE symbol REGEXP '^16(1[7-9]|2[0-9]|3[0-3])[.]T$' ORDER BY symbol ASC"
@@ -168,7 +211,7 @@ function wp_stocks_sv_build() {
     $maxLb   = max(array_keys($cfg['lookbacks']));
 
     if (empty($bench)) {
-        return array('records' => array(), 'dates' => array(), 'missing' => array_keys($names), 'jumps' => array(), 'no_bench' => true);
+        return array('records' => array(), 'dates' => array(), 'missing' => array_keys($names), 'jumps' => array(), 'removed' => array(), 'no_bench' => true);
     }
 
     foreach (array_keys($names) as $sym) {
@@ -178,7 +221,7 @@ function wp_stocks_sv_build() {
     }
 
     foreach ((array) $syms as $sym) {
-        $s = wp_stocks_sv_load_series($sym);
+        $s = wp_stocks_sv_clean_series(wp_stocks_sv_load_series($sym), $sym, $removed);
         // 1306.T と日付が揃うものだけ使う
         $d  = array();
         $sc = array();
@@ -232,7 +275,7 @@ function wp_stocks_sv_build() {
 
     $dates = array_keys($dateSet);
     sort($dates);
-    return array('records' => $records, 'dates' => $dates, 'missing' => array_values(array_unique($missing)), 'jumps' => array_values($jumps));
+    return array('records' => $records, 'dates' => $dates, 'missing' => array_values(array_unique($missing)), 'jumps' => array_values($jumps), 'removed' => $removed);
 }
 
 function wp_stocks_sv_median(array $v) {
@@ -419,8 +462,15 @@ function wp_stocks_sv_render_page($embedded = false) {
         echo '<div class="notice notice-warning"><p>履歴が足りない業種ETF: '
             . esc_html(implode(', ', $data['missing'])) . '</p></div>';
     }
+    if (!empty($data['removed'])) {
+        echo '<div class="notice notice-info"><p>データ不良とみなして取り除いた日（数日で元の水準に戻る異常値）：</p><ul style="margin-left:20px;list-style:disc;">';
+        foreach (array_slice($data['removed'], 0, 20) as $j) {
+            echo '<li>' . esc_html($j[0]) . ' ' . esc_html($j[1]) . '：' . wp_stocks_sv_fmt($j[2], 1, '%') . '</li>';
+        }
+        echo '</ul></div>';
+    }
     if (!empty($data['jumps'])) {
-        echo '<div class="notice notice-warning"><p>異常な日次変動（分割やデータ不良の疑い。前後の期間は集計から除外しています）：</p><ul style="margin-left:20px;list-style:disc;">';
+        echo '<div class="notice notice-warning"><p>水準が戻らない大きな変動（分割の疑い。前後の期間は集計から除外しています）：</p><ul style="margin-left:20px;list-style:disc;">';
         foreach (array_slice($data['jumps'], 0, 20) as $j) {
             echo '<li>' . esc_html($j[0]) . ' ' . esc_html($j[1]) . '：' . wp_stocks_sv_fmt($j[2], 1, '%') . '</li>';
         }
