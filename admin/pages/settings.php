@@ -192,6 +192,16 @@ function wp_stocks_settings_page() {
         if ($now_ut >= $next_ut) $next_ut->modify('+1 day');
         wp_schedule_event($next_ut->getTimestamp(), 'daily', 'wp_stocks_us_technical_cron');
 
+        // 総合判定の朝の再計算時刻（平日のみ実行）
+        $am_time = sanitize_text_field($_POST['judgment_am_time'] ?? '07:30');
+        if (!preg_match('/^\d{2}:\d{2}$/', $am_time)) $am_time = '07:30';
+        update_option('wp_stocks_judgment_am_time', $am_time);
+        wp_clear_scheduled_hook('wp_stocks_judgment_am_cron');
+        list($amh, $amm) = explode(':', $am_time);
+        $next_am = new DateTime("today {$amh}:{$amm}:00", new DateTimeZone('Asia/Tokyo'));
+        if ($next_am->getTimestamp() <= time()) $next_am->modify('+1 day');
+        wp_schedule_event($next_am->getTimestamp(), 'daily', 'wp_stocks_judgment_am_cron');
+
         // 米国株取得時刻
         $us_fetch_time = sanitize_text_field($_POST['us_fetch_time'] ?? '06:30');
         if (!preg_match('/^\d{2}:\d{2}$/', $us_fetch_time)) $us_fetch_time = '06:30';
@@ -556,6 +566,15 @@ function wp_stocks_settings_page() {
     echo '<tr><th>米国株テクニカル計算時刻</th><td>';
     echo '<input type="time" name="us_technical_time" value="' . esc_attr($us_technical_time) . '" style="width:120px;">';
     echo '<p class="description">米国株取得の1時間後推奨（例：7:30）。<br>次回実行予定：' . esc_html($next_us_tech_str) . '</p>';
+    echo '</td></tr>';
+
+    // 総合判定の朝の再計算時刻
+    $am_time    = get_option('wp_stocks_judgment_am_time', '07:30');
+    $next_am    = wp_next_scheduled('wp_stocks_judgment_am_cron');
+    $next_am_str = $next_am ? (new DateTime('@' . $next_am))->setTimezone(new DateTimeZone('Asia/Tokyo'))->format('Y/m/d H:i:s') : '未設定';
+    echo '<tr><th>総合判定の朝の再計算時刻</th><td>';
+    echo '<input type="time" name="judgment_am_time" value="' . esc_attr($am_time) . '" style="width:120px;">';
+    echo '<p class="description">米国株取得・米国株テクニカル・ニュースの朝の回収が終わったあとに設定してください（例：7:30）。平日のみ実行します。夜間の先物の動きも同時に記録します。<br>次回実行予定：' . esc_html($next_am_str) . '</p>';
     echo '</td></tr>';
 
     // 株価取得sleepを設定から取得

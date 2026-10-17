@@ -241,6 +241,52 @@ function wp_stocks_oj_fill_history() {
 add_action('wp_stocks_judgment_cron', 'wp_stocks_oj_fill_history', 20);   // 既定(10)の記録処理のあとに実行
 
 // --------------------------------------------------
+// 朝の再計算（日本時間 7:30 既定。夕方23:30の記録はそのまま残し、朝の結果は同じ行の am_* 列に別に書く）
+//   朝の時点で変わるもの：米国の終値・VIX・米国株のテクニカル・朝のニュース回収。夜間の先物の動きも記録する（点数には未反映）
+//   土日は行わない。今日の行がまだ無い銘柄は、朝の列だけの行を作る（夕方の記録が同じ行を更新する）
+//   $only_stock : 1銘柄だけ実行する（銘柄ページの手動ボタン用）
+// --------------------------------------------------
+function wp_stocks_oj_morning_run($only_stock = null) {
+    global $wpdb;
+    if (!function_exists('wp_stocks_jh_table') || !function_exists('wp_stocks_jh_ensure_tables') || !wp_stocks_jh_ensure_tables()) return 0;
+    $manual = $only_stock !== null;
+    if (!$manual && (int) (new DateTime('now', new DateTimeZone('Asia/Tokyo')))->format('N') >= 6) return 0;   // 土日は行わない
+    @set_time_limit(300);
+    $t    = wp_stocks_jh_table();
+    $date = wp_stocks_jh_today();
+    $now  = (new DateTime('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d H:i:s');
+    $defs = wp_stocks_oj_label_defs();
+
+    if (function_exists('wp_stocks_jh_record_overnight')) wp_stocks_jh_record_overnight();
+
+    $stocks = $manual ? [$only_stock] : $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks WHERE status IN ('watch','portfolio') AND is_sector_etf = 0");
+    $n = 0;
+    foreach ((array) $stocks as $s) {
+        $r  = wp_stocks_overall_judgment($s);
+        $am = [
+            'am_total_score' => $r['total'] === null ? null : round($r['total'] * 100, 1),
+            'am_total_label' => $r['label'] === null ? null : $defs[$r['label']][0],
+            'am_at'          => $now,
+        ];
+        $id = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$t} WHERE stock_id = %d AND judgment_date = %s", $s->id, $date));
+        if ($id) $wpdb->update($t, $am, ['id' => $id]);
+        else $wpdb->insert($t, array_merge($am, ['stock_id' => (int) $s->id, 'judgment_date' => $date, 'created_at' => $now, 'updated_at' => $now]));
+        $n++;
+    }
+    return $n;
+}
+add_action('wp_stocks_judgment_am_cron', 'wp_stocks_oj_morning_run');
+
+add_action('init', function () {
+    if (wp_next_scheduled('wp_stocks_judgment_am_cron')) return;
+    $hm = get_option('wp_stocks_judgment_am_time', '07:30');
+    if (!preg_match('/^\d{2}:\d{2}$/', $hm)) $hm = '07:30';
+    $next = new DateTime("today {$hm}:00", new DateTimeZone('Asia/Tokyo'));
+    if ($next->getTimestamp() <= time()) $next->modify('+1 day');
+    wp_schedule_event($next->getTimestamp(), 'daily', 'wp_stocks_judgment_am_cron');
+});
+
+// --------------------------------------------------
 // マーケット情報「総合判定」タブ（検証用）。日本株と米国株は別のタブ
 //   $market: 'jp'（日本株）／'us'（米国株）。総合点の高い順に並べる
 // --------------------------------------------------

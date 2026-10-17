@@ -14,7 +14,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-const WP_STOCKS_JH_VERSION = '2';
+const WP_STOCKS_JH_VERSION = '3';
 
 // v2で追加した列（判定の材料の生の値。judgment-factors.php が計算する）
 function wp_stocks_jh_factor_columns() {
@@ -26,6 +26,17 @@ function wp_stocks_jh_factor_columns() {
         'obv_chg20' => 'FLOAT DEFAULT NULL', 'mfi14' => 'FLOAT DEFAULT NULL', 'vol_ratio' => 'FLOAT DEFAULT NULL',
         'atr_pct' => 'FLOAT DEFAULT NULL',
     ];
+}
+
+// v3で追加した列（朝の再計算と、夜間の先物の動き）
+//   judgment_history   : am_total_score / am_total_label = 朝（日本時間7:30頃）の総合判定。夕方の total_* とは別に残す
+//   market_environment : fut_nky = 日経先物（大阪の日中終値 15:45 からの変化率%）、fut_sp / fut_nq = S&P500・ナスダック100先物（米国現物の終値 16:00 ET からの変化率%）
+//                        am_regime = 朝時点の日本株の地合い。点数にはまだ反映しない（記録だけ）
+function wp_stocks_jh_am_columns($which) {
+    if ($which === 'market') {
+        return ['am_regime' => 'VARCHAR(12) DEFAULT NULL', 'fut_nky' => 'FLOAT DEFAULT NULL', 'fut_sp' => 'FLOAT DEFAULT NULL', 'fut_nq' => 'FLOAT DEFAULT NULL', 'am_at' => 'DATETIME DEFAULT NULL'];
+    }
+    return ['am_total_score' => 'FLOAT DEFAULT NULL', 'am_total_label' => 'VARCHAR(20) DEFAULT NULL', 'am_at' => 'DATETIME DEFAULT NULL'];
 }
 
 function wp_stocks_jh_table() {
@@ -98,6 +109,13 @@ function wp_stocks_jh_ensure_tables() {
     $have = $wpdb->get_col("DESCRIBE {$t}", 0);
     foreach (wp_stocks_jh_factor_columns() as $col => $def) {
         if (!in_array($col, $have, true)) $wpdb->query("ALTER TABLE {$t} ADD COLUMN {$col} {$def}");
+    }
+    foreach (wp_stocks_jh_am_columns('stock') as $col => $def) {
+        if (!in_array($col, $have, true)) $wpdb->query("ALTER TABLE {$t} ADD COLUMN {$col} {$def}");
+    }
+    $have_m = $wpdb->get_col("DESCRIBE {$m}", 0);
+    foreach (wp_stocks_jh_am_columns('market') as $col => $def) {
+        if (!in_array($col, $have_m, true)) $wpdb->query("ALTER TABLE {$m} ADD COLUMN {$col} {$def}");
     }
     update_option('wp_stocks_jh_db_version', WP_STOCKS_JH_VERSION);
     return true;
@@ -317,6 +335,70 @@ function wp_stocks_jh_record_market() {
 }
 
 // ============================================================
+// 夜間の先物の動き（朝の再計算で記録する。点数にはまだ反映しない）
+// ============================================================
+
+// 先物の「基準時刻の価格」から「いま」までの変化率（%）。15分足を使う。
+//   $tz/$hm : 基準にする時刻（日経先物＝日本時間 15:45、米国先物＝ニューヨーク時間 16:00）
+// 基準時刻に足が無い日（週末・休場）は、さかのぼって直近の営業日を使う。取れなければ null。
+function wp_stocks_jh_futures_change($symbol, $tz, $hm) {
+    $url = 'https://query1.finance.yahoo.com/v8/finance/chart/' . rawurlencode($symbol) . '?interval=15m&range=5d';
+    $res = wp_remote_get($url, ['headers' => ['User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'], 'timeout' => 15]);
+    if (is_wp_error($res)) return null;
+    $body = json_decode(wp_remote_retrieve_body($res), true);
+    $r = $body['chart']['result'][0] ?? null;
+    $ts = $r['timestamp'] ?? null; $cl = $r['indicators']['quote'][0]['close'] ?? null;
+    if (!$ts || !$cl) return null;
+
+    $now = time();
+    $bars = [];
+    foreach ($ts as $i => $t) {
+        if (isset($cl[$i]) && (float)$cl[$i] > 0 && $t <= $now) $bars[] = [(int)$t, (float)$cl[$i]];
+    }
+    if (count($bars) < 2) return null;
+    $last = end($bars);
+    if ($now - $last[0] > 6 * 3600) return null;   // 6時間以上動いていない（休場中）なら、今の値としては使わない
+
+    list($h, $mi) = array_map('intval', explode(':', $hm));
+    $zone = new DateTimeZone($tz);
+    for ($d = 0; $d <= 6; $d++) {
+        $dt = new DateTime('@' . $now);
+        $dt->setTimezone($zone);
+        $dt->modify("-{$d} day")->setTime($h, $mi, 0);
+        $cand = $dt->getTimestamp();
+        if ($cand > $now) continue;
+        $base = null;
+        foreach ($bars as $b) { if ($b[0] <= $cand) $base = $b; else break; }
+        if ($base !== null && $cand - $base[0] <= 3600) {
+            return ['pct' => round(($last[1] / $base[1] - 1) * 100, 2), 'base' => $base[1], 'last' => $last[1], 'last_at' => $last[0]];
+        }
+    }
+    return null;
+}
+
+// 朝の記録：夜間の先物の動きと、朝時点の地合いを、今日の地合いの行に書く（行が無ければ作る。夕方の記録は同じ行を更新する）
+function wp_stocks_jh_record_overnight() {
+    global $wpdb;
+    if (!wp_stocks_jh_ensure_tables()) return false;
+    $date = wp_stocks_jh_today();
+    $now  = (new DateTime('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d H:i:s');
+    $nky = wp_stocks_jh_futures_change('NIY=F', 'Asia/Tokyo', '15:45');
+    $sp  = wp_stocks_jh_futures_change('ES=F', 'America/New_York', '16:00');
+    $nq  = wp_stocks_jh_futures_change('NQ=F', 'America/New_York', '16:00');
+    $regime = function_exists('wp_stocks_ms_regime') ? wp_stocks_ms_regime(false) : null;
+    $row = [
+        'am_regime' => $regime['level'] ?? null,
+        'fut_nky' => $nky['pct'] ?? null, 'fut_sp' => $sp['pct'] ?? null, 'fut_nq' => $nq['pct'] ?? null,
+        'am_at' => $now,
+    ];
+    $m = wp_stocks_jh_market_table();
+    $id = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$m} WHERE trade_date = %s", $date));
+    if ($id) $wpdb->update($m, $row, ['id' => $id]);
+    else $wpdb->insert($m, array_merge($row, ['trade_date' => $date, 'created_at' => $now]));
+    return $row;
+}
+
+// ============================================================
 // 後から埋める：5・20・60営業日後の騰落率
 // ============================================================
 
@@ -410,6 +492,10 @@ function wp_stocks_jh_render_tab($stock) {
         wp_stocks_jh_record_stock($stock);
         $notice = '<div class="notice notice-success inline"><p>今日の分を記録しました。</p></div>';
     }
+    if (!empty($_GET['jh_am']) && current_user_can('manage_options') && wp_verify_nonce($_GET['_wpnonce'] ?? '', 'wp_stocks_jh_am_' . $id) && function_exists('wp_stocks_oj_morning_run')) {
+        wp_stocks_oj_morning_run($stock);
+        $notice .= '<div class="notice notice-success inline"><p>朝の再計算を実行しました（先物の動きも記録）。</p></div>';
+    }
     if (!wp_stocks_jh_ensure_tables()) {
         echo '<p style="color:#c0392b;">判定履歴のテーブルを作成できませんでした。</p>';
         return;
@@ -419,8 +505,11 @@ function wp_stocks_jh_render_tab($stock) {
 
     echo $notice;
     $url = wp_nonce_url(add_query_arg(['ctab' => 'history', 'jh_record' => 1], admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id)), 'wp_stocks_jh_record_' . $id);
+    $url_am = wp_nonce_url(add_query_arg(['ctab' => 'history', 'jh_am' => 1], admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id)), 'wp_stocks_jh_am_' . $id);
+    $am_time = get_option('wp_stocks_judgment_am_time', '07:30');
     echo '<p><a href="' . esc_url($url) . '" class="button">&#x1F4DD; 今日の分を今すぐ記録</a> '
-        . '<span class="description">毎日 23:30（日本時間）に全銘柄を自動で記録します。同じ日は上書きされます。</span></p>';
+        . '<a href="' . esc_url($url_am) . '" class="button">&#x1F305; 朝の再計算を今すぐ実行</a> '
+        . '<span class="description">毎日 23:30（日本時間）に全銘柄を自動で記録します。同じ日は上書きされます。朝（' . esc_html($am_time) . '、平日のみ）にも総合判定を再計算し、「朝の判定」に別に残します。</span></p>';
 
     if (!$rows) {
         echo '<p style="color:#888;">まだ記録がありません。記録は今日から貯まります。</p>';
@@ -437,8 +526,8 @@ function wp_stocks_jh_render_tab($stock) {
     echo '</div>';
 
     $lab = ['strong_buy' => '強い買い', 'buy' => '買い優勢', 'hold' => 'HOLD', 'sell' => '売り優勢', 'strong_sell' => '強い売り'];
-    echo '<div style="overflow-x:auto;"><table class="widefat striped" style="font-size:12px;min-width:900px;"><thead><tr>'
-        . '<th>日付</th><th style="text-align:right;">総合点</th><th>総合判定</th><th>テクニカル</th><th>財務</th><th>ニュース</th><th>業種</th><th style="text-align:right;">終値</th>'
+    echo '<div style="overflow-x:auto;"><table class="widefat striped" style="font-size:12px;min-width:980px;"><thead><tr>'
+        . '<th>日付</th><th style="text-align:right;">総合点</th><th>総合判定</th><th style="text-align:right;" title="朝の再計算（平日）の結果。夕方の総合点とは別に残る">朝の点</th><th>朝の判定</th><th>テクニカル</th><th>財務</th><th>ニュース</th><th>業種</th><th style="text-align:right;">終値</th>'
         . '<th style="text-align:right;">5日後</th><th style="text-align:right;">20日後</th><th style="text-align:right;">60日後</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         $tech = $r->tech_score !== null ? esc_html(($r->tech_score > 0 ? '+' : '') . $r->tech_score) . ($r->tech_label ? '（' . esc_html($lab[$r->tech_label] ?? $r->tech_label) . '）' : '') : '<span style="color:#ccc;">-</span>';
@@ -467,7 +556,9 @@ function wp_stocks_jh_render_tab($stock) {
             $tl = '<strong style="color:' . esc_attr($tcol) . ';" title="' . esc_attr('版：' . (($r->weights_ver ?? '') !== '' ? $r->weights_ver : '不明')) . '">' . esc_html($r->total_label) . '</strong>'
                 . ' <span style="color:#aaa;font-size:10px;">' . esc_html($r->weights_ver ?? '') . '</span>';
         }
-        echo '<tr><td>' . esc_html($r->judgment_date) . '</td><td style="text-align:right;">' . $tot . '</td><td>' . $tl . '</td><td>' . $tech . '</td><td>' . wp_stocks_jh_fmt($r->fin_score) . '</td><td>' . $news . '</td>'
+        $am_tot = wp_stocks_jh_fmt($r->am_total_score ?? null, 0, true);
+        $am_lab = !empty($r->am_total_label) ? '<strong>' . esc_html($r->am_total_label) . '</strong>' : '<span style="color:#ccc;">-</span>';
+        echo '<tr><td>' . esc_html($r->judgment_date) . '</td><td style="text-align:right;">' . $tot . '</td><td>' . $tl . '</td><td style="text-align:right;">' . $am_tot . '</td><td>' . $am_lab . '</td><td>' . $tech . '</td><td>' . wp_stocks_jh_fmt($r->fin_score) . '</td><td>' . $news . '</td>'
             . '<td>' . ($r->sector_code ? esc_html($r->sector_code) : '<span style="color:#ccc;">-</span>') . '</td>'
             . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->price, ($r->price !== null && $r->price < 1000) ? 2 : 0) . '</td>'
             . '<td style="text-align:right;">' . $ret($r->ret_5d) . '</td><td style="text-align:right;">' . $ret($r->ret_20d) . '</td><td style="text-align:right;">' . $ret($r->ret_60d) . '</td></tr>';

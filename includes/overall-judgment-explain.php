@@ -300,6 +300,30 @@ function wp_stocks_oje_outlook($c) {
 
 // ---------- 画面 ----------
 
+// 夜間の先物の動き：直近の記録（朝の再計算で入る）を表示する。点数には反映していない
+function wp_stocks_oje_render_overnight($stock) {
+    global $wpdb;
+    if (!function_exists('wp_stocks_jh_market_table')) return;
+    $m = wp_stocks_jh_market_table();
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $m)) !== $m) return;
+    if (!in_array('fut_nky', (array) $wpdb->get_col("DESCRIBE {$m}", 0), true)) return;
+    $row = $wpdb->get_row("SELECT trade_date, am_at, fut_nky, fut_sp, fut_nq FROM {$m} WHERE am_at IS NOT NULL ORDER BY trade_date DESC LIMIT 1");
+    if (!$row) return;
+    $is_us = ($stock->currency ?? 'JPY') === 'USD';
+    $items = $is_us ? ['S&P500先物' => $row->fut_sp, 'ナスダック100先物' => $row->fut_nq, '日経先物' => $row->fut_nky]
+                    : ['日経先物' => $row->fut_nky, 'S&P500先物' => $row->fut_sp, 'ナスダック100先物' => $row->fut_nq];
+    echo '<div style="background:#f7f9fb;border:1px solid #dde4ea;border-radius:6px;padding:10px 14px;margin:0 0 16px;max-width:900px;font-size:13px;">';
+    echo '<strong>&#x1F319; 夜間の先物の動き</strong>（' . esc_html(substr((string) $row->am_at, 0, 16)) . ' 時点）　';
+    foreach ($items as $label => $v) {
+        echo esc_html($label) . ' ';
+        if ($v === null) { echo '<span style="color:#aaa;">取得なし</span>　'; continue; }
+        $c = $v >= 0 ? '#e74c3c' : '#3498db';
+        echo '<span style="color:' . $c . ';font-weight:bold;">' . ($v >= 0 ? '+' : '') . esc_html(number_format((float) $v, 2)) . '%</span>　';
+    }
+    echo '<div style="color:#888;font-size:11px;margin-top:4px;">日経先物は大阪の日中終値（15:45）から、米国先物は米国現物の終値（16:00 ET）からの変化です。参考表示で、総合点にはまだ反映していません。</div>';
+    echo '</div>';
+}
+
 function wp_stocks_oje_render_tab($stock) {
     if (!function_exists('wp_stocks_overall_judgment') || !function_exists('wp_stocks_oj_label_defs')) {
         echo '<p style="color:#888;">総合判定の機能が読み込まれていません。</p>';
@@ -322,6 +346,9 @@ function wp_stocks_oje_render_tab($stock) {
     echo '</div>';
     echo '<p style="margin:14px 0 0;font-size:14px;line-height:1.8;">' . esc_html(wp_stocks_oje_summary($c)) . '</p>';
     echo '</div>';
+
+    // ===== 1.5 夜間の先物の動き（朝の再計算で記録。点数には未反映） =====
+    wp_stocks_oje_render_overnight($stock);
 
     // ===== 2. 層ごとの状況 =====
     echo '<h3 style="margin:24px 0 8px;">&#x1F9E9; 層ごとの状況</h3>';
