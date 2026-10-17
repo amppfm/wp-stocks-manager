@@ -187,7 +187,7 @@ function wp_stocks_sv_spearman(array $x, array $y) {
 /**
  * 全業種のスコアとその後の超過リターンを作る。
  * 戻り値: array(
- *   'records' => [symbol => [i => ['date','score','fwd'=>[H=>%|null]]]],
+ *   'records' => [symbol => [i => ['date','score','sig'=>[営業日数=>±1/0],'fwd'=>[H=>%|null]]]],
  *   'dates'   => 記録のある日付の昇順リスト,
  *   'missing' => データの無い業種ETF
  * )
@@ -256,9 +256,11 @@ function wp_stocks_sv_build() {
                 continue; // スコアの計算窓に異常な変動がある
             }
             $score = 0.0;
+            $sig   = array();
             foreach ($cfg['lookbacks'] as $lb => $p) {
                 $rel = (($sc[$i] / $sc[$i - $lb]) - 1) * 100 - (($bc[$i] / $bc[$i - $lb]) - 1) * 100;
-                $score += $p[1] * wp_stocks_sv_sign($rel, $p[0]);
+                $sig[$lb] = wp_stocks_sv_sign($rel, $p[0]);
+                $score += $p[1] * $sig[$lb];
             }
             $fwd = array();
             foreach ($cfg['horizons'] as $h) {
@@ -268,7 +270,7 @@ function wp_stocks_sv_build() {
                     $fwd[$h] = null;
                 }
             }
-            $records[$sym][$i] = array('date' => $d[$i], 'score' => round($score, 4), 'fwd' => $fwd);
+            $records[$sym][$i] = array('date' => $d[$i], 'score' => round($score, 4), 'sig' => $sig, 'fwd' => $fwd);
             $dateSet[$d[$i]]   = true;
         }
     }
@@ -303,7 +305,7 @@ function wp_stocks_sv_bucket($score) {
  * 期間 [$from, $to]（日付文字列、両端含む。null なら無制限）で集計する。
  * 戻り値: [H => ['top'=>[n,avg,hit], 'neutral'=>..., 'bottom'=>..., 'spread'=>, 'ic'=>, 'ic_pos'=>, 'ic_days'=>]]
  */
-function wp_stocks_sv_aggregate(array $records, $from = null, $to = null) {
+function wp_stocks_sv_aggregate(array $records, $from = null, $to = null, $variant = null) {
     $cfg = wp_stocks_sv_config();
     $out = array();
     foreach ($cfg['horizons'] as $h) {
@@ -319,14 +321,15 @@ function wp_stocks_sv_aggregate(array $records, $from = null, $to = null) {
                 if ($f === null) {
                     continue;
                 }
-                $b = wp_stocks_sv_bucket($r['score']);
+                $sv = ($variant === null) ? $r['score'] : $r['sig'][$variant];
+                $b  = wp_stocks_sv_bucket($sv);
                 $acc[$b][0]++;
                 $vals[$b][] = $f;
                 $acc[$b][1] += $f;
                 if ($f > 0) {
                     $acc[$b][2]++;
                 }
-                $perDay[$r['date']]['s'][] = $r['score'];
+                $perDay[$r['date']]['s'][] = $sv;
                 $perDay[$r['date']]['f'][] = $f;
             }
         }
@@ -440,6 +443,48 @@ function wp_stocks_sv_render_recent(array $records) {
     echo '<p>上位・下位だった業種のうち逆行：' . intval($mismatch) . ' / ' . intval($counted) . '</p>';
 }
 
+/**
+ * 合成スコアと、1ヶ月・2ヶ月・6ヶ月それぞれ単独のスコアを、
+ * 全期間・前半・後半で並べて比べる（上位−下位の差と順位相関）。
+ */
+function wp_stocks_sv_render_compare(array $records, $mid) {
+    $cfg      = wp_stocks_sv_config();
+    $variants = array('' => '合成スコア（現行）');
+    foreach (array_keys($cfg['lookbacks']) as $lb) {
+        $variants[$lb] = max(1, (int) round($lb / 21)) . 'ヶ月の相対強度のみ';
+    }
+    $periods = array('全期間' => array(null, null), '前半' => array(null, $mid), '後半' => array($mid, null));
+    $res     = array();
+    foreach ($variants as $key => $label) {
+        $v = ($key === '') ? null : (int) $key;
+        foreach ($periods as $pn => $rng) {
+            $res[$key][$pn] = wp_stocks_sv_aggregate($records, $rng[0], $rng[1], $v);
+        }
+    }
+    echo '<h3>どの期間のスコアが効いているか（比較）</h3>';
+    echo '<p>合成スコアと、1ヶ月・2ヶ月・6ヶ月それぞれ単独のスコアを比べます。'
+        . '見るのは「前半と後半の両方で、差と相関が同じ向き（プラス）で出ているか」です。'
+        . '片方の期間だけ良いものは、偶然の可能性が高いので採用しません。'
+        . 'データは約1.5年・窓が重なるため、小さな差は誤差と区別できません。</p>';
+    foreach ($cfg['horizons'] as $h) {
+        echo '<p><strong>' . intval($h) . '営業日後</strong>（差＝上位−下位の超過リターン（%）、相関＝日ごとの順位相関の平均）</p>';
+        echo '<table class="widefat striped" style="max-width:960px"><thead><tr><th>スコア</th>';
+        foreach (array_keys($periods) as $pn) {
+            echo '<th>' . esc_html($pn) . '：差</th><th>' . esc_html($pn) . '：相関</th>';
+        }
+        echo '</tr></thead><tbody>';
+        foreach ($variants as $key => $label) {
+            echo '<tr><td>' . esc_html($label) . '</td>';
+            foreach (array_keys($periods) as $pn) {
+                $row = $res[$key][$pn][$h];
+                echo '<td>' . wp_stocks_sv_fmt($row['spread']) . '</td><td>' . wp_stocks_sv_fmt($row['ic'], 3) . '</td>';
+            }
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+    }
+}
+
 function wp_stocks_sv_render_page($embedded = false) {
     if (!current_user_can('manage_options')) {
         return;
@@ -491,5 +536,6 @@ function wp_stocks_sv_render_page($embedded = false) {
     wp_stocks_sv_render_summary('全期間', wp_stocks_sv_aggregate($data['records']));
     wp_stocks_sv_render_summary('前半（〜' . $mid . '）', wp_stocks_sv_aggregate($data['records'], null, $mid));
     wp_stocks_sv_render_summary('後半（' . $mid . '〜）', wp_stocks_sv_aggregate($data['records'], $mid, null));
+    wp_stocks_sv_render_compare($data['records'], $mid);
     echo '</div>';
 }
