@@ -96,6 +96,25 @@ function wp_stocks_oje_axis_ratios($fin) {
     return $out;
 }
 
+// 財務スコアの指標ごとの点数と理由（日本株 v2 のみ。理由が無いデータは出さない）
+function wp_stocks_oje_render_fin_reasons($fin) {
+    if (!is_array($fin) || empty($fin['detail']) || !is_array($fin['detail'])) return;
+    $rows = '';
+    foreach ($fin['detail'] as $name => $d) {
+        if (!is_array($d) || !isset($d['理由'])) continue;
+        $pts = $d['点数'] ?? null;
+        $td  = 'padding:4px 8px;border-top:1px solid #f0f0f0;';
+        $rows .= '<tr><td style="' . $td . 'color:#888;white-space:nowrap;">' . esc_html((string) ($d['軸'] ?? '')) . '</td>'
+            . '<td style="' . $td . 'font-weight:bold;white-space:nowrap;">' . esc_html((string) $name) . '</td>'
+            . '<td style="' . $td . 'white-space:nowrap;">' . esc_html((string) ($d['値'] ?? '-')) . '</td>'
+            . '<td style="' . $td . 'text-align:right;white-space:nowrap;">' . ($pts === null ? 'N/A' : esc_html($pts . '／' . ($d['満点'] ?? '') . '点')) . '</td>'
+            . '<td style="' . $td . 'font-size:12px;line-height:1.6;">' . esc_html((string) $d['理由']) . '</td></tr>';
+    }
+    if ($rows === '') return;
+    echo '<details style="margin-top:10px;"><summary style="cursor:pointer;font-weight:bold;">点数の理由（指標ごと）</summary>'
+        . '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;"><tbody>' . $rows . '</tbody></table></div></details>';
+}
+
 // ---------- 材料を集める ----------
 
 function wp_stocks_oje_context($stock) {
@@ -139,7 +158,7 @@ function wp_stocks_oje_summary($c) {
     if ($oj['label'] === null) {
         return 'テクニカルがまだ計算されていないため、総合判定は出していません。';
     }
-    $names = ['timing' => 'テクニカル', 'catalyst' => 'ニュース', 'sector' => '業種', 'regime' => '地合い'];
+    $names = ['timing' => 'テクニカル', 'catalyst' => 'ニュース', 'quality' => '質・成長', 'sector' => '業種', 'regime' => '地合い'];
     $pos = []; $neg = [];
     foreach ($names as $k => $nm) {
         $v = $oj['layers'][$k] ?? null;
@@ -352,11 +371,11 @@ function wp_stocks_oje_render_tab($stock) {
 
     // ===== 2. 層ごとの状況 =====
     echo '<h3 style="margin:24px 0 8px;">&#x1F9E9; 層ごとの状況</h3>';
-    echo '<p class="description" style="max-width:900px;">総合点＝4つの層（-1〜+1）を重みづけして平均したものです。データの無い層は0（中立）として計算します。「総合点への効き」は 重み × 値 × 100 です。</p>';
+    echo '<p class="description" style="max-width:900px;">総合点＝5つの層（-1〜+1）を重みづけして平均したものです。データの無い層は0（中立）として計算します。「総合点への効き」は 重み × 値 × 100 です。</p>';
     echo '<div style="overflow-x:auto;"><table class="widefat striped" style="font-size:13px;max-width:1000px;"><thead><tr>'
         . '<th>層</th><th style="text-align:right;">値（-1〜+1）</th><th style="text-align:right;">重み</th><th style="text-align:right;">総合点への効き</th><th>理由</th></tr></thead><tbody>';
 
-    $layer_defs = ['timing' => 'タイミング（テクニカル）', 'catalyst' => '材料（ニュース）', 'sector' => '業種', 'regime' => '地合い'];
+    $layer_defs = ['timing' => 'タイミング（テクニカル）', 'catalyst' => '材料（ニュース）', 'quality' => '質・成長', 'sector' => '業種', 'regime' => '地合い'];
     foreach ($layer_defs as $k => $nm) {
         $v  = $L[$k] ?? null;
         $wt = $W[$k] ?? 0;
@@ -391,6 +410,21 @@ function wp_stocks_oje_render_tab($stock) {
                 echo '直近30日のニュース加減点 ' . esc_html(wp_stocks_oje_sign((float) $raw['news'], 1)) . '点（±' . esc_html(number_format(wp_stocks_oj_news_scale(), 0)) . 'を±1として換算）。';
                 echo $lines ? '<br>点に入っているニュース：<br>' . implode('<br>', $lines) : '<br>点が付いたニュースはありません。';
             }
+        } elseif ($k === 'quality') {
+            $q = $raw['quality'] ?? null;
+            if ($v === null || !is_array($q) || empty($q['groups'])) {
+                echo 'ROE・営業利益ROA・成長率のデータが取れていないため、この層はありません（0として計算）。';
+            } else {
+                echo '資本効率（ROE・営業利益ROA）と成長（売上・営業利益・会社予想の増益率）の2グループの平均です。各項目は、得点率（満点に対する割合）を-1〜+1に直しています（得点率50%が0）。';
+                foreach ($q['groups'] as $gname => $g) {
+                    if (empty($g['items'])) continue;
+                    echo '<br><strong>' . esc_html($gname) . '</strong>：' . wp_stocks_oje_val($g['value'], 2);
+                    foreach ($g['items'] as $qi) {
+                        echo '<br>・' . esc_html($qi['reason']);
+                    }
+                }
+                echo '<br><span style="color:#888;">営業利益ROAは「営業利益÷総資産」でROICの近似です（投下資本ではなく総資産で割るため、現金の多い会社は低めに出ます。銀行・金融と米国株には使いません）。</span>';
+            }
         } elseif ($k === 'sector') {
             if ($v === null) {
                 echo '業種が特定できないため、この層はありません（0として計算）。';
@@ -422,7 +456,7 @@ function wp_stocks_oje_render_tab($stock) {
     echo '</tbody></table></div>';
 
     // 財務（足し算には入れず、フィルターに使う）
-    echo '<h3 style="margin:24px 0 8px;">&#x1F4B0; 財務（点には入れず、買いを止めるフィルターに使用）</h3>';
+    echo '<h3 style="margin:24px 0 8px;">&#x1F4B0; 財務（買いを止めるフィルターに使用。ROE・成長は「質・成長」の層で点に反映）</h3>';
     $fin = $c['fin'];
     echo '<div style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px 18px;max-width:900px;font-size:13px;line-height:1.8;">';
     if (!is_array($fin) || !isset($fin['score'])) {
@@ -443,6 +477,7 @@ function wp_stocks_oje_render_tab($stock) {
             foreach ($c['axes'] as $an => $r) $ax[] = esc_html($an . ' ' . number_format($r * 100, 0) . '%');
             echo '<br>軸ごとの得点率：' . implode(' ／ ', $ax) . '。';
         }
+        wp_stocks_oje_render_fin_reasons($fin);
     }
     echo '</div>';
 

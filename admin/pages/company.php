@@ -568,6 +568,7 @@ function wp_stocks_company_page() {
     echo '<th style="padding:6px 10px;text-align:center;border:1px solid #ddd;">値</th>';
     echo '<th style="padding:6px 10px;text-align:center;border:1px solid #ddd;">点数</th>';
     echo '<th style="padding:6px 10px;text-align:center;border:1px solid #ddd;">評価</th>';
+    echo '<th style="padding:6px 10px;text-align:left;border:1px solid #ddd;">点数の理由</th>';
     echo '</tr></thead><tbody>';
     foreach ($sc_detail as $name => $d) {
         $pts = $d['点数'] ?? null;
@@ -587,11 +588,12 @@ function wp_stocks_company_page() {
         echo '<td style="padding:5px 10px;text-align:center;border:1px solid #ddd;font-weight:bold;">' . esc_html($val) . '</td>';
         echo '<td style="padding:5px 10px;text-align:center;border:1px solid #ddd;font-weight:bold;color:' . $c . ';">' . ($pts === null ? 'N/A' : $pts . '点' . (!empty($d['満点']) ? '／' . $d['満点'] . '点' : '')) . '</td>';
         echo '<td style="padding:5px 10px;text-align:center;border:1px solid #ddd;color:' . $c . ';">' . esc_html($d['評価']) . '</td>';
+        echo '<td style="padding:5px 10px;border:1px solid #ddd;color:#555;font-size:11px;line-height:1.5;">' . esc_html($d['理由'] ?? '') . '</td>';
         echo '</tr>';
     }
     // 減点フラグがあれば、スコア表の下に理由付きで一覧表示する
     if (!empty($score_result['flags'])) {
-        echo '<tr><td colspan="5" style="padding:8px 10px;border:1px solid #ddd;background:#fff5f5;">';
+        echo '<tr><td colspan="6" style="padding:8px 10px;border:1px solid #ddd;background:#fff5f5;">';
         echo '<div style="font-size:12px;color:#c0392b;font-weight:bold;margin-bottom:4px;">&#x26A0;&#xFE0F; 減点フラグ（合計' . esc_html($score_result['penalty'] ?? 0) . '点・上限-15点）</div>';
         foreach ($score_result['flags'] as $f) {
             echo '<div style="font-size:12px;color:#c0392b;">・[' . esc_html($f['重さ']) . '] ' . esc_html($f['label']) . '（' . esc_html($f['penalty']) . '点）</div>';

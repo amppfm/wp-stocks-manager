@@ -14,16 +14,18 @@
  *     財務スコアの取れた項目が半分に満たない銘柄（新規上場など）には、このフィルターを使わない。
  *     ただし、財務を確認できていない銘柄は、「強い買い」を「買い優勢」までにとどめる。
  *   - 判定の材料の6要素（決算サプライズ・EPS修正など）は、点数への換算が決まるまで、この判定には入れない。
+ * 2026-10-17 第1.3版：財務の「ROE」「営業利益ROA（ROICに近い指標）」「売上・営業利益・会社予想の増益率」を、小さな層「質・成長」（重み0.10）として足し算に追加。
+ *   各項目は、財務スコアの得点率（満点に対する割合）を-1〜+1に直して使う（営業利益ROAは営業利益÷総資産。ROICの近似）。財務スコアの基準そのものは変えない。
  * 重み・閾値は仮の値。判定履歴（stock_judgment_history）の実績を見て調整する。weights_ver に版を記録する。
  */
 
 if (!defined('ABSPATH')) exit;
 
-function wp_stocks_oj_version() { return 'v1.2-prov'; }
+function wp_stocks_oj_version() { return 'v1.3-prov'; }
 
-// 層の重み（仮）。合計は1.0
+// 層の重み（仮）。合計は1.10（合計で割って平均するので、質・成長を足したぶん、他の層の効きが約9%ずつ下がる）
 function wp_stocks_oj_weights() {
-    return ['timing' => 0.40, 'catalyst' => 0.25, 'sector' => 0.20, 'regime' => 0.15];
+    return ['timing' => 0.40, 'catalyst' => 0.25, 'sector' => 0.20, 'regime' => 0.15, 'quality' => 0.10];
 }
 
 // 総合点（-1〜+1）→ラベルの閾値（仮）
@@ -74,7 +76,7 @@ function wp_stocks_oj_label_for($total) {
 
 // --------------------------------------------------
 // 合算（純粋計算）
-// $layers: ['timing' =>, 'catalyst' =>, 'sector' =>, 'regime' => ]（各 -1〜+1 または null）
+// $layers: ['timing' =>, 'catalyst' =>, 'sector' =>, 'regime' =>, 'quality' => ]（各 -1〜+1 または null）
 // $fin   : 財務フィルターに使う財務スコア（0〜100）。使わないときは null
 // $fin_ok: 財務を確認できているか（取れた項目が足りない・計算できないときは false → 強い買いは買い優勢までにとどめる）
 // 戻り値: ['total' => -1〜+1|null, 'label' => キー|null, 'raw_label' => 条件を掛ける前のキー|null,
@@ -131,6 +133,83 @@ function wp_stocks_oj_combine(array $layers, $fin = null, $fin_ok = true) {
 }
 
 // --------------------------------------------------
+// 質・成長の層（-1〜+1）。財務スコア（calc_score の結果）の得点率を使う
+//   資本効率：ROE（財務スコアの得点率）／営業利益ROA（営業利益÷総資産。ROICの近似。日本株の非金融のみ）
+//   成長    ：売上成長率・営業利益成長率・会社予想の増益率（いずれも財務スコアの得点率）
+//   各項目＝2×得点率−1（得点率50%で0）。グループ内は平均、層は取れたグループの平均。取れた項目が無ければ null
+// 戻り値: ['value' => -1〜+1|null, 'groups' => [グループ名 => ['value' => , 'items' => [['name','reason','x'],...]]]]
+// --------------------------------------------------
+function wp_stocks_oj_quality($stock, $fin) {
+    $out = ['value' => null, 'groups' => []];
+    if (!is_array($fin) || empty($fin['detail']) || !is_array($fin['detail'])) return $out;
+    $det          = $fin['detail'];
+    $is_us        = ($stock->currency ?? 'JPY') === 'USD';
+    $is_financial = !empty($fin['is_financial']);
+    $sg           = function ($x) { return sprintf('%+.2f', $x); };
+
+    // 財務スコアの項目 → 項目（得点率を-1〜+1に）
+    $from_score = function ($name) use ($det, $is_us, $sg) {
+        $d = $det[$name] ?? null;
+        if (!is_array($d) || !array_key_exists('点数', $d) || $d['点数'] === null) return null;
+        $max = isset($d['満点']) ? (float) $d['満点'] : (($is_us && $name === 'ROE') ? 20.0 : 0.0);
+        if ($max <= 0) return null;
+        $frac = max(0.0, min(1.0, (float) $d['点数'] / $max));
+        $x    = max(-1.0, min(1.0, 2 * $frac - 1));
+        $val  = isset($d['値']) && $d['値'] !== null && $d['値'] !== '' && $d['値'] !== 'N/A' ? $d['値'] . '：' : '';
+        return ['name' => $name, 'x' => $x,
+            'reason' => $name . '　' . $val . '財務スコア' . $d['点数'] . '点／' . $max . '点（得点率' . round($frac * 100) . '%）→ ' . $sg($x)];
+    };
+
+    $cap = [];
+    $it = $from_score('ROE');
+    if ($it) {
+        $cap[] = $it;
+    } elseif (!$is_us && isset($stock->roe) && $stock->roe !== null && $stock->roe !== '' && (float) $stock->roe < 0) {
+        // 財務スコアではROEがマイナスだとN/A扱いになるが、ここではマイナスを弱みとして数える
+        $cap[] = ['name' => 'ROE', 'x' => -1.0, 'reason' => 'ROE　' . number_format((float) $stock->roe, 1) . '%：マイナスのため得点率0%（財務スコアではN/A扱い）→ -1.00'];
+    }
+
+    // 営業利益ROA（ROICに近い指標）：日本株の非金融のみ
+    if (!$is_us && !$is_financial && function_exists('wp_stocks_get_latest_annual_financials')) {
+        $fy  = wp_stocks_get_latest_annual_financials($stock->id ?? 0, 1);
+        $fy0 = $fy[0] ?? null;
+        if ($fy0 && $fy0->operating_profit !== null && !empty($fy0->total_assets) && $fy0->total_assets > 0) {
+            $roa = $fy0->operating_profit / $fy0->total_assets * 100;
+            if     ($roa >= 8) { $frac = 1.0; $ev = '優良'; }
+            elseif ($roa >= 5) { $frac = 0.7; $ev = '良好'; }
+            elseif ($roa >= 3) { $frac = 0.3; $ev = '普通'; }
+            else               { $frac = 0.0; $ev = '低い'; }
+            $x = 2 * $frac - 1;
+            $cap[] = ['name' => '営業利益ROA', 'x' => $x,
+                'reason' => '営業利益ROA（ROICに近い指標）　' . number_format($roa, 1) . '%（営業利益' . number_format($fy0->operating_profit / 1e8, 1)
+                    . '億円÷総資産' . number_format($fy0->total_assets / 1e8, 1) . '億円）：「' . $ev . '」で得点率' . round($frac * 100) . '% → ' . $sg($x)
+                    . '。基準（仮）：8%以上=100%／5%以上=70%／3%以上=30%／3%未満=0%'];
+        }
+    }
+
+    $growth = [];
+    foreach (['売上成長率', '営業利益成長率', '会社予想の増益率'] as $nm) {
+        $it = $from_score($nm);
+        if ($it) $growth[] = $it;
+    }
+
+    $groups = ['資本効率（ROE・営業利益ROA）' => $cap, '成長（売上・営業利益・会社予想の増益率）' => $growth];
+    $vals = [];
+    foreach ($groups as $gname => $items) {
+        $gv = null;
+        if ($items) {
+            $s = 0.0;
+            foreach ($items as $i) $s += $i['x'];
+            $gv = $s / count($items);
+            $vals[] = $gv;
+        }
+        $out['groups'][$gname] = ['value' => $gv, 'items' => $items];
+    }
+    if ($vals) $out['value'] = array_sum($vals) / count($vals);
+    return $out;
+}
+
+// --------------------------------------------------
 // 1銘柄の入力を、いまのデータから集める
 // 戻り値: ['raw' => [tech, fin, fin_cov, fin_ok, news, regime_level], 'layers' => [...], 'market' => wp_stocks_market_score の結果]
 // --------------------------------------------------
@@ -152,8 +231,10 @@ function wp_stocks_oj_inputs($stock) {
 
     // 土台：財務スコアと、取れた項目の割合（足りない銘柄はフィルターに使わない）
     $fin = null; $fin_cov = null; $fin_ok = false;   // 財務スコアが計算できなければ、確認できていない扱い
+    $fin_res = null;
     if (function_exists('wp_stocks_calc_score')) {
         $sc = wp_stocks_calc_score($stock);
+        $fin_res = is_array($sc) ? $sc : null;
         if (is_array($sc) && isset($sc['score'])) {
             $fin = (int) $sc['score'];
             $fin_cov = isset($sc['coverage']) ? (string) $sc['coverage'] : null;
@@ -185,9 +266,12 @@ function wp_stocks_oj_inputs($stock) {
     else                                           $sector = (1 - $tb) * ($sector_sc === null ? 0 : $sector_sc) + $tb * $theme_sc;
     $regime = $m['regime']['level'] !== 'unknown' ? $m['regime']['score'] : null;
 
+    // 質・成長：財務スコアの ROE・成長の得点率と、営業利益ROA（ROICの近似）
+    $quality = wp_stocks_oj_quality($stock, $fin_res);
+
     return [
-        'raw'    => ['tech' => $tech_score, 'fin' => $fin, 'fin_cov' => $fin_cov, 'fin_ok' => $fin_ok, 'news' => $news, 'regime_level' => $m['regime']['level'], 'theme' => $m['theme']],
-        'layers' => ['timing' => $timing, 'catalyst' => $catalyst, 'sector' => $sector, 'regime' => $regime],
+        'raw'    => ['tech' => $tech_score, 'fin' => $fin, 'fin_cov' => $fin_cov, 'fin_ok' => $fin_ok, 'news' => $news, 'regime_level' => $m['regime']['level'], 'theme' => $m['theme'], 'quality' => $quality],
+        'layers' => ['timing' => $timing, 'catalyst' => $catalyst, 'sector' => $sector, 'regime' => $regime, 'quality' => $quality['value']],
         'market' => $m,
     ];
 }
@@ -334,7 +418,7 @@ function wp_stocks_render_overall_judgment_panel($market = 'jp') {
     echo '<div style="margin-top:10px;">';
     echo '<h3>&#x1F3AF; 総合判定（' . ($is_us ? '米国株' : '日本株') . '・検証用・第1.1版）</h3>';
     echo '<p style="color:#666;font-size:13px;">5層の合算：タイミング（テクニカルの複合点）' . ($w['timing'] * 100) . '％'
-        . ($is_us ? '' : '・材料（ニュース加減点）' . ($w['catalyst'] * 100) . '％') . '・業種' . ($w['sector'] * 100) . '％・地合い' . ($w['regime'] * 100)
+        . ($is_us ? '' : '・材料（ニュース加減点）' . ($w['catalyst'] * 100) . '％') . '・質・成長（ROE・営業利益ROA・成長率）' . ($w['quality'] * 100) . '％・業種' . ($w['sector'] * 100) . '％・地合い' . ($w['regime'] * 100)
         . '％の加重平均（業種には、株探タグのテーマの強さを15％だけ混ぜています）。各層は-1〜+1に換算し、データの無い層は0（中立）として扱います' . ($is_us ? '（米国株は材料の層がありません）' : '') . '。'
         . ' 総合点は-100〜+100。ラベルは、強い買い＝' . ($th['strong_buy'] * 100) . '以上／買い優勢＝' . ($th['buy'] * 100) . '以上／売り優勢＝' . ($th['sell'] * 100)
         . '以下／強い売り＝' . ($th['strong_sell'] * 100) . '以下（いずれも仮の値）。</p>'
@@ -357,7 +441,7 @@ function wp_stocks_render_overall_judgment_panel($market = 'jp') {
 
     $heads = ['コード', '銘柄', '区分', '総合点', '判定', '財務', 'タイミング'];
     if (!$is_us) $heads[] = '材料';
-    $heads[] = '業種'; $heads[] = '地合い';
+    $heads[] = '質・成長'; $heads[] = '業種'; $heads[] = '地合い';
     echo '<div style="max-height:680px;overflow:auto;border:1px solid #ddd;"><table style="border-collapse:collapse;background:#fff;min-width:980px;width:100%;font-size:13px;"><thead><tr style="background:#f8f9fa;position:sticky;top:0;">';
     foreach ($heads as $h) {
         echo '<th style="padding:8px 10px;text-align:left;border-bottom:2px solid #ddd;">' . esc_html($h) . '</th>';
@@ -407,6 +491,7 @@ function wp_stocks_render_overall_judgment_panel($market = 'jp') {
         if (!$is_us) {
             echo '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['catalyst']) . ($raw['news'] !== null ? $small(($raw['news'] >= 0 ? '+' : '') . number_format($raw['news'], 1) . '点') : '') . '</td>';
         }
+        echo '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['quality'] ?? null) . '</td>';
         echo '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['sector'])
             . ($raw['theme'] ? $small('テーマ' . ($raw['theme']['score'] >= 0 ? '+' : '') . number_format($raw['theme']['score'], 2)) : '') . '</td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['regime']) . $small($lv[$raw['regime_level']] ?? '-') . '</td>'
