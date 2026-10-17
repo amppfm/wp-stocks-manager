@@ -379,9 +379,9 @@ function wp_stocks_sv_render_summary($title, array $agg) {
     $labels = array('top' => '上位（スコア≥+0.3）', 'neutral' => '中立', 'bottom' => '下位（スコア≤-0.3）');
     echo '<h3>' . esc_html($title) . '</h3>';
     foreach ($agg as $h => $row) {
-        echo '<p><strong>' . intval($h) . '営業日後の超過リターン（業種ETF − 1306.T、%）</strong></p>';
+        echo '<p><strong>' . intval($h) . '営業日後に、市場（1306.T）より何%上回ったか（業種ETF − 1306.T、%）</strong></p>';
         echo '<table class="widefat striped" style="max-width:760px"><thead><tr>'
-            . '<th>スコア帯</th><th>件数</th><th>平均超過</th><th>中央値</th><th>プラスの割合</th></tr></thead><tbody>';
+            . '<th>スコア帯</th><th>件数</th><th>平均で上回った幅</th><th>中央値</th><th>市場を上回った割合</th></tr></thead><tbody>';
         foreach ($labels as $k => $label) {
             echo '<tr><td>' . esc_html($label) . '</td><td>' . intval($row[$k]['n']) . '</td><td>'
                 . wp_stocks_sv_fmt($row[$k]['avg']) . '</td><td>'
@@ -389,11 +389,84 @@ function wp_stocks_sv_render_summary($title, array $agg) {
                 . wp_stocks_sv_fmt($row[$k]['hit'] === null ? null : $row[$k]['hit'] * 100, 0, '%') . '</td></tr>';
         }
         echo '</tbody></table>';
-        echo '<p>上位−下位の差: <strong>' . wp_stocks_sv_fmt($row['spread']) . '</strong>　'
-            . '順位相関（日ごとの平均）: <strong>' . wp_stocks_sv_fmt($row['ic'], 3) . '</strong>　'
-            . '相関がプラスだった日の割合: ' . wp_stocks_sv_fmt($row['ic_pos'] === null ? null : $row['ic_pos'] * 100, 0, '%')
+        echo '<p>上位−下位の差（スコアが高い業種が低い業種よりどれだけ上回ったか）: <strong>' . wp_stocks_sv_fmt($row['spread']) . '</strong>　'
+            . 'スコアの順番どおりに動いた度合い（-1〜+1。0は無関係、日ごとの平均）: <strong>' . wp_stocks_sv_fmt($row['ic'], 3) . '</strong>　'
+            . '順番どおりだった日の割合: ' . wp_stocks_sv_fmt($row['ic_pos'] === null ? null : $row['ic_pos'] * 100, 0, '%')
             . '（' . intval($row['ic_days']) . '日）</p>';
     }
+}
+
+/** 直近の確認用：$h 営業日前のスコアが上位・下位だった業種のうち、実績が逆行した業種名と、対象の件数 */
+function wp_stocks_sv_recent_mismatch(array $records, $h) {
+    $names = wp_stocks_sv_sector_names();
+    $bad   = array();
+    $count = 0;
+    foreach ($names as $sym => $name) {
+        if (empty($records[$sym])) {
+            continue;
+        }
+        $keys = array_keys($records[$sym]);
+        $past = end($keys) - $h;
+        if (!isset($records[$sym][$past])) {
+            continue;
+        }
+        $p = $records[$sym][$past];
+        $f = $p['fwd'][$h];
+        $b = wp_stocks_sv_bucket($p['score']);
+        if ($f === null || $b === 'neutral') {
+            continue;
+        }
+        $count++;
+        if (($b === 'top' && $f < 0) || ($b === 'bottom' && $f > 0)) {
+            $bad[] = $name;
+        }
+    }
+    return array('names' => $bad, 'count' => $count);
+}
+
+/**
+ * ページ先頭の結論の箱。20営業日後の「上位−下位の差」を、全期間・前半・後半で見て3段階で判定する。
+ *   合っている：前半・後半ともプラス、全期間の差が0.3pt以上、順番どおりに動いた度合いもプラス
+ *   逆になっている：前半・後半ともマイナス
+ *   それ以外：前半と後半でずれている／差が小さい（判断できない）
+ */
+function wp_stocks_sv_render_verdict(array $records, $mid) {
+    $h   = 20;
+    $all = wp_stocks_sv_aggregate($records);
+    $fst = wp_stocks_sv_aggregate($records, null, $mid);
+    $snd = wp_stocks_sv_aggregate($records, $mid, null);
+    $a = $all[$h]; $f = $fst[$h]; $b = $snd[$h];
+    $fmt = function ($v) { return $v === null ? '–' : (($v >= 0 ? '+' : '') . number_format((float) $v, 2) . '%'); };
+
+    if ($a['spread'] === null || $f['spread'] === null || $b['spread'] === null) {
+        $level = 'unknown'; $head = '判断できません'; $color = '#888'; $line = 'データの件数が足りません。';
+    } elseif ($f['spread'] > 0 && $b['spread'] > 0 && $a['spread'] >= 0.3 && $a['ic'] !== null && $a['ic'] > 0) {
+        $level = 'good'; $head = '方向は合っています'; $color = '#1a7f37';
+        $line = 'スコアが高かった業種は、低かった業種より、20営業日後に平均 ' . $fmt($a['spread']) . ' 上回りました。前半・後半のどちらでもプラスです。';
+    } elseif ($f['spread'] < 0 && $b['spread'] < 0) {
+        $level = 'bad'; $head = '逆になっています'; $color = '#b32d2e';
+        $line = 'スコアが高かった業種のほうが、低かった業種より下回りました（平均 ' . $fmt($a['spread']) . '）。前半・後半のどちらでもマイナスです。スコアの作り方の見直しが必要です。';
+    } elseif (($f['spread'] > 0) !== ($b['spread'] > 0)) {
+        $level = 'mixed'; $head = '前半と後半でずれています'; $color = '#b26a00';
+        $line = '前半は ' . $fmt($f['spread']) . '、後半は ' . $fmt($b['spread']) . ' と向きが違います。偶然の可能性があるので、スコアはまだ調整しないでください。';
+    } else {
+        $level = 'weak'; $head = '差が小さく、判断できません'; $color = '#b26a00';
+        $line = '上位と下位の差は ' . $fmt($a['spread']) . ' で、誤差と区別できない大きさです。';
+    }
+    $s5 = $all[5]['spread'] ?? null;
+    $mm = wp_stocks_sv_recent_mismatch($records, $h);
+
+    echo '<div style="background:#fff;border:2px solid ' . esc_attr($color) . ';border-radius:8px;padding:14px 18px;margin:14px 0;max-width:900px;">';
+    echo '<div style="font-size:12px;color:#888;">結論（20営業日後の動きで判定）</div>';
+    echo '<div style="font-size:20px;font-weight:bold;color:' . esc_attr($color) . ';margin:2px 0 6px;">' . esc_html($head) . '</div>';
+    echo '<p style="margin:0 0 6px;font-size:14px;line-height:1.7;">' . esc_html($line) . '</p>';
+    echo '<p style="margin:0;font-size:13px;color:#555;line-height:1.7;">'
+        . '5営業日後でも同じ見方をすると、上位−下位の差は ' . esc_html($fmt($s5)) . ' です。'
+        . ($mm['count'] ? '　直近（20営業日前のスコア）で逆行した業種：' . ($mm['names'] ? esc_html(implode('、', $mm['names'])) : 'なし') . '（' . intval(count($mm['names'])) . ' / ' . intval($mm['count']) . '）。' : '')
+        . '</p>';
+    echo '<p style="margin:8px 0 0;font-size:11px;color:#888;line-height:1.6;">「上位」はスコア+0.3以上、「下位」は-0.3以下の業種です。データは約1.5年で、先の期間が重なるため、小さな差は誤差と区別できません。'
+        . '判定の目安：前半・後半ともプラス、差が0.3pt以上、順番どおりに動いた度合いもプラス → 合っている。</p>';
+    echo '</div>';
 }
 
 /** 直近の目視確認用：20営業日前のスコアと、その後の実績 */
@@ -404,7 +477,7 @@ function wp_stocks_sv_render_recent(array $records) {
     echo '<p>「逆行」が多い業種だけ見れば十分です。1回の逆行では調整しない前提で見てください。</p>';
     echo '<table class="widefat striped" style="max-width:900px"><thead><tr>'
         . '<th>業種</th><th>' . $h . '営業日前の日付</th><th>そのときのスコア</th>'
-        . '<th>その後の超過（%）</th><th>判定</th><th>現在のスコア</th></tr></thead><tbody>';
+        . '<th>その後に市場を上回った幅（%）</th><th>判定</th><th>現在のスコア</th></tr></thead><tbody>';
     $mismatch = 0;
     $counted  = 0;
     foreach ($names as $sym => $name) {
@@ -467,7 +540,7 @@ function wp_stocks_sv_render_compare(array $records, $mid) {
         . '片方の期間だけ良いものは、偶然の可能性が高いので採用しません。'
         . 'データは約1.5年・窓が重なるため、小さな差は誤差と区別できません。</p>';
     foreach ($cfg['horizons'] as $h) {
-        echo '<p><strong>' . intval($h) . '営業日後</strong>（差＝上位−下位の超過リターン（%）、相関＝日ごとの順位相関の平均）</p>';
+        echo '<p><strong>' . intval($h) . '営業日後</strong>（差＝スコアが高い業種が低い業種より上回った幅（%）、相関＝スコアの順番どおりに動いた度合い（-1〜+1））</p>';
         echo '<table class="widefat striped" style="max-width:960px"><thead><tr><th>スコア</th>';
         foreach (array_keys($periods) as $pn) {
             echo '<th>' . esc_html($pn) . '：差</th><th>' . esc_html($pn) . '：相関</th>';
@@ -532,10 +605,19 @@ function wp_stocks_sv_render_page($embedded = false) {
     $mid   = $dates[intdiv(count($dates), 2)];
     echo '<p>対象期間: ' . esc_html($first) . ' 〜 ' . esc_html($last) . '（営業日 ' . count($dates) . '日）</p>';
 
+    wp_stocks_sv_render_verdict($data['records'], $mid);
+
+    $sum = 'cursor:pointer;font-weight:600;font-size:14px;padding:6px 0;';
+    echo '<details style="margin:8px 0;"><summary style="' . $sum . '">直近の確認（20営業日前のスコアと、その後の実績）</summary>';
     wp_stocks_sv_render_recent($data['records']);
+    echo '</details>';
+    echo '<details style="margin:8px 0;"><summary style="' . $sum . '">スコア帯ごとの成績（全期間・前半・後半）</summary>';
     wp_stocks_sv_render_summary('全期間', wp_stocks_sv_aggregate($data['records']));
     wp_stocks_sv_render_summary('前半（〜' . $mid . '）', wp_stocks_sv_aggregate($data['records'], null, $mid));
     wp_stocks_sv_render_summary('後半（' . $mid . '〜）', wp_stocks_sv_aggregate($data['records'], $mid, null));
+    echo '</details>';
+    echo '<details style="margin:8px 0;"><summary style="' . $sum . '">どの期間のスコアが効いているか（比較）</summary>';
     wp_stocks_sv_render_compare($data['records'], $mid);
+    echo '</details>';
     echo '</div>';
 }
