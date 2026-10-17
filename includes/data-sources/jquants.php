@@ -464,3 +464,107 @@ function wp_stocks_jquants_test_fetch() {
     }
     exit;
 	}
+
+// -----------------------------------------------------------
+// 決算発表予定日（fins/earnings-date）→ stocks.earnings_date
+//   code指定で、その銘柄の予定日の履歴（変更分を含む）が返る。決算期・四半期ごとに最新の発表を採り、
+//   今日以降で最も近い SchDate を「次回の決算日」とする。予定日が未定（SchDate が空）の銘柄は更新しない。
+//   更新するのは「未取得」か「過ぎた日付」の銘柄だけ。今後の日付が入っているもの（手入力を含む）は上書きしない。
+//   戻り値: ['date'=>'Y-m-d','fq'=>'1Q'] ／ null（予定なし・未定） ／ false（APIエラー。$err にHTTPコードなど）
+// -----------------------------------------------------------
+function wp_stocks_jquants_fetch_earnings_date($code, &$err = null) {
+    $api_key = wp_stocks_jquants_get_api_key();
+    if (empty($api_key)) { $err = 'APIキー未設定'; return false; }
+    $code = strtoupper(preg_replace('/\.T$/i', '', trim((string) $code)));
+    $url  = 'https://api.jquants.com/v2/fins/earnings-date?code=' . urlencode($code);
+    $res  = wp_remote_get($url, ['headers' => ['x-api-key' => $api_key], 'timeout' => 15]);
+    if (is_wp_error($res)) { $err = $res->get_error_message(); return false; }
+    $status = (int) wp_remote_retrieve_response_code($res);
+    if ($status !== 200) { $err = 'HTTP ' . $status . ' ' . mb_substr((string) wp_remote_retrieve_body($res), 0, 120); return false; }
+    $body = json_decode(wp_remote_retrieve_body($res), true);
+    $rows = $body['data'] ?? [];
+    if (!is_array($rows) || !$rows) return null;
+
+    usort($rows, function ($a, $b) { return strcmp((string) ($b['PubDate'] ?? ''), (string) ($a['PubDate'] ?? '')); });   // 発表日の新しい順
+    $latest = [];
+    foreach ($rows as $r) {
+        $k = ($r['FYE'] ?? '') . '|' . ($r['FQName'] ?? '');
+        if (!isset($latest[$k])) $latest[$k] = $r;   // 決算期・四半期ごとの最新の予定
+    }
+    $today = wp_stocks_jh_today_safe();
+    $best = null;
+    foreach ($latest as $r) {
+        $d = trim((string) ($r['SchDate'] ?? ''));
+        if ($d === '') continue;
+        if (preg_match('/^\d{8}$/', $d)) $d = substr($d, 0, 4) . '-' . substr($d, 4, 2) . '-' . substr($d, 6, 2);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) || $d < $today) continue;
+        if ($best === null || $d < $best['date']) $best = ['date' => $d, 'fq' => (string) ($r['FQName'] ?? '')];
+    }
+    return $best;
+}
+
+function wp_stocks_jh_today_safe() {
+    return (new DateTime('now', new DateTimeZone('Asia/Tokyo')))->format('Y-m-d');
+}
+
+// 対象銘柄（日本株・ウォッチ/保有・ETF以外で、未取得か日付が過ぎたもの）を、時間の許す限り更新する。
+// 残りがあれば数分後に続きを実行する（J-Quantsの回数制限対策）。
+function wp_stocks_jquants_sync_earnings_dates($time_budget = 200) {
+    global $wpdb;
+    @set_time_limit($time_budget + 60);
+    $start = time();
+    $today = wp_stocks_jh_today_safe();
+    $stocks = $wpdb->get_results($wpdb->prepare(
+        "SELECT id, code, currency FROM {$wpdb->prefix}stocks
+         WHERE status IN ('watch','portfolio') AND is_sector_etf = 0 AND (earnings_date IS NULL OR earnings_date < %s)
+         ORDER BY code ASC", $today));
+    $checked = get_option('wp_stocks_earnings_checked', []);
+    if (!is_array($checked) || ($checked['_date'] ?? '') !== $today) $checked = ['_date' => $today];
+
+    $st = ['at' => current_time('mysql'), 'updated' => 0, 'none' => 0, 'failed' => 0, 'first_error' => '', 'remaining' => 0];
+    $stop = false;
+    foreach ((array) $stocks as $s) {
+        if (($s->currency ?? 'JPY') === 'USD') continue;
+        if (!preg_match('/^\d{3}[0-9A-Za-z]$/', strtoupper(preg_replace('/\.T$/i', '', trim((string) $s->code))))) continue;
+        if (isset($checked[$s->id])) continue;   // 今日はもう確認済み（予定が未定のものを何度も問い合わせない）
+        if ($stop || (time() - $start) > $time_budget) { $st['remaining']++; continue; }
+
+        $err = null;
+        $r = wp_stocks_jquants_fetch_earnings_date($s->code, $err);
+        if ($r === false && strpos((string) $err, 'HTTP 429') === 0) {   // 回数制限：60秒待って1回だけやり直す
+            sleep(60);
+            $r = wp_stocks_jquants_fetch_earnings_date($s->code, $err);
+            if ($r === false && strpos((string) $err, 'HTTP 429') === 0) { $stop = true; $st['remaining']++; $st['first_error'] = $st['first_error'] ?: '回数制限（429）のため一時中断'; continue; }
+        }
+        if ($r === false) {
+            $st['failed']++;
+            if ($st['first_error'] === '') $st['first_error'] = $s->code . '：' . $err;
+            if (strpos((string) $err, 'HTTP 40') === 0 && strpos((string) $err, 'HTTP 429') !== 0) { $stop = true; }   // 認証・プラン外などは続けても同じ
+            continue;
+        }
+        $checked[$s->id] = 1;
+        if ($r === null) { $st['none']++; }
+        else {
+            $wpdb->update($wpdb->prefix . 'stocks', ['earnings_date' => $r['date']], ['id' => $s->id]);
+            $st['updated']++;
+        }
+        usleep(13000000);   // Free(5回/分)に合わせて13秒間隔
+    }
+    update_option('wp_stocks_earnings_checked', $checked, false);
+    update_option('wp_stocks_earnings_sync_status', $st, false);
+    if ($st['remaining'] > 0 && $st['failed'] === 0 && !wp_next_scheduled('wp_stocks_earnings_sync_cron')) {
+        wp_schedule_single_event(time() + ($stop ? 1800 : 300), 'wp_stocks_earnings_sync_cron');
+    }
+    if ($st['first_error'] !== '' && function_exists('wp_stocks_log')) wp_stocks_log('error', 'jquants_earnings_date', 'JP', $st['first_error']);
+    return $st;
+}
+add_action('wp_stocks_earnings_sync_cron', function () { wp_stocks_jquants_sync_earnings_dates(); });
+
+// 毎日 6:10（日本時間）に実行。決算日が過ぎた銘柄は、次の決算日に更新される
+add_action('init', function () {
+    if (wp_next_scheduled('wp_stocks_earnings_sync_daily')) return;
+    $next = new DateTime('today 06:10', new DateTimeZone('Asia/Tokyo'));
+    if ($next->getTimestamp() <= time()) $next->modify('+1 day');
+    wp_schedule_event($next->getTimestamp(), 'daily', 'wp_stocks_earnings_sync_daily');
+});
+add_action('wp_stocks_earnings_sync_daily', function () { wp_stocks_jquants_sync_earnings_dates(); });

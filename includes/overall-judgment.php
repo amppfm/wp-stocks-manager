@@ -413,6 +413,7 @@ function wp_stocks_render_overall_judgment_panel($market = 'jp') {
     };
     $small = function ($t) { return ' <span style="color:#888;font-size:11px;">' . esc_html($t) . '</span>'; };
     $lv = ['good' => '良', 'neutral' => '中立', 'bad' => '悪', 'unknown' => '不明'];
+    $badge = function ($st) { if (!function_exists('wp_stocks_jf_days_to_earnings')) return ''; $d = wp_stocks_jf_days_to_earnings($st); if ($d === null || $d > 7) return ''; return ' <span title="決算発表をまたぐ可能性があります" style="padding:1px 6px;border-radius:3px;background:#fff3cd;color:#8a5a00;font-size:11px;white-space:nowrap;">' . esc_html($d === 0 ? '⚠決算本日' : '⚠決算まで' . $d . '日') . '</span>'; };
     $w  = wp_stocks_oj_weights(); $th = wp_stocks_oj_thresholds();
 
     echo '<div style="margin-top:10px;">';
@@ -485,7 +486,7 @@ function wp_stocks_render_overall_judgment_panel($market = 'jp') {
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;"><a href="' . esc_url(admin_url('admin.php?page=wp-stocks-company&stock_id=' . intval($s->id))) . '">' . esc_html($s->name) . '</a></td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;color:#666;">' . esc_html($s->status === 'portfolio' ? '保有' : 'ウォッチ') . '</td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $total . '</td>'
-            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $lab . '</td>'
+            . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $lab . $badge($s) . '</td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fin_cell . '</td>'
             . '<td style="padding:6px 10px;border-bottom:1px solid #eee;">' . $fmt($L['timing']) . ($raw['tech'] !== null ? $small(($raw['tech'] >= 0 ? '+' : '') . $raw['tech'] . '点') : '') . '</td>';
         if (!$is_us) {
