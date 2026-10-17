@@ -153,6 +153,30 @@ function wp_stocks_nws_nqn_code($text, array $codes) {
     return count($hit) === 1 ? (string)key($hit) : '';
 }
 
+// NQNの個別記事（まとめ記事以外）：issuesに複数コードがあるとき、見出しに登録銘柄の名前が1つだけ入っていればその銘柄に決める
+function wp_stocks_nws_nqn_code_by_name($text, array $codes) {
+    global $wpdb;
+    if (!isset($wpdb)) return '';
+    $cand = [];
+    foreach ($codes as $c) {
+        $c = strtoupper(trim((string)$c));
+        if ($c === '') continue;
+        $cand[] = $c;
+        $cand[] = $c . '.T';
+    }
+    if (!$cand) return '';
+    $ph = implode(',', array_fill(0, count($cand), '%s'));
+    $rows = $wpdb->get_results($wpdb->prepare("SELECT code, name FROM {$wpdb->prefix}stocks WHERE code IN ({$ph})", $cand));
+    $t = mb_convert_kana((string)$text, 'as', 'UTF-8');
+    $hit = [];
+    foreach ((array)$rows as $r) {
+        $n = mb_convert_kana((string)$r->name, 'as', 'UTF-8');
+        $n = preg_replace('/^[(（]株[)）]|[(（]株[)）]$|株式会社/u', '', $n);
+        if (mb_strlen($n) >= 3 && mb_strpos($t, $n) !== false) $hit[wp_stocks_nws_normalize_symbol($r->code)] = true;
+    }
+    return count($hit) === 1 ? (string)key($hit) : '';
+}
+
 // 金額文字列（475億円 / 1,200百万円 など）を百万円単位の数値へ
 function wp_stocks_nws_yen_million($num, $unit) {
     $v = (float)str_replace(',', '', (string)$num);
@@ -179,7 +203,10 @@ function wp_stocks_nws_parse_headline($headline, $issues = '') {
     } else {
         $codes = array_values(array_filter(array_map('trim', explode('|', (string)$issues)), 'strlen'));
         if (count($codes) === 1) $code = strtoupper($codes[0]);
-        elseif (count($codes) > 1 && $tag === 'NQN') $code = wp_stocks_nws_nqn_code($t, $codes);
+        elseif (count($codes) > 1 && $tag === 'NQN') {
+            $code = wp_stocks_nws_nqn_code($t, $codes);
+            if ($code === '') $code = wp_stocks_nws_nqn_code_by_name($t, $codes);
+        }
     }
     if ($code === '') return null;
     return ['tag' => $tag, 'text' => $t, 'code' => $code];
@@ -575,8 +602,8 @@ function wp_stocks_nws_classify_core($tag, $t, $code, $sources = null) {
         if (preg_match('/民事再生|会社更生|破産|特別清算|事業再生ADR/u', $t)) {
             wp_stocks_nws_hit($hits, $P, 'bankrupt', 'risk', '法的整理');
         }
-        if (preg_match('/不正アクセス|情報漏えい|情報漏洩|ランサムウェア|サイバー攻撃/u', $t)
-            && preg_match('/お詫び|発生|被害|調査|対応について|影響/u', $t)
+        if (preg_match('/不正アクセス|情報漏えい|情報漏洩|個人情報の流出|情報流出|ランサムウェア|サイバー攻撃/u', $t)
+            && preg_match('/お詫び|発生|被害|調査|対応について|影響|嫌気|漏えいか|漏洩か|流出か/u', $t)
             && !preg_match('/支援|窓口|サービス|開始|提供|発売|対策|ソリューション/u', $t)) {
             wp_stocks_nws_hit($hits, $P, 'incident', 'risk', '不正アクセス・情報漏えい');
         }
