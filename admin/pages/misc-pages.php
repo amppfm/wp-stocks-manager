@@ -93,12 +93,23 @@ function wp_stocks_calendar_page() {
 
     $view  = in_array($_GET['view'] ?? '', ['list','month'], true) ? $_GET['view'] : 'list';
     $today = date('Y-m-d');
+    // JPX（東証）の決算発表予定日一覧から取得（数秒で終わるので、その場で実行する）
+    if (isset($_POST['wp_stocks_sync_jpx']) && current_user_can('manage_options') && function_exists('wp_stocks_jpx_sync_earnings_dates')) {
+        check_admin_referer('wp_stocks_sync_earnings_nonce');
+        $jr = wp_stocks_jpx_sync_earnings_dates();
+        if ($jr['error'] !== '') {
+            echo '<div class="notice notice-error"><p>JPXからの取得に失敗しました：' . esc_html($jr['error']) . '</p></div>';
+        } else {
+            echo '<div class="notice notice-success"><p>JPXから決算予定日を取得しました。ファイル ' . intval($jr['files']) . '個／更新 ' . intval($jr['updated']) . '件／一覧に予定なし ' . intval($jr['missing']) . '件。</p></div>';
+        }
+    }
     echo '<div class="wrap"><h1>📅 決算カレンダー</h1>';
 
     if (function_exists('wp_stocks_jquants_sync_earnings_dates')) {
         $es = get_option('wp_stocks_earnings_sync_status', []);
         echo '<form method="post" style="margin:0 0 12px;">';
         wp_nonce_field('wp_stocks_sync_earnings_nonce');
+        echo '<button type="submit" name="wp_stocks_sync_jpx" class="button">&#x1F504; JPXから決算予定日を取得</button> ';
         echo '<button type="submit" name="wp_stocks_sync_earnings" class="button">&#x1F504; J-Quantsから決算予定日を取得</button> ';
         echo '<span class="description">毎日 6:10 にも自動で取得します。未取得の銘柄と、決算日が過ぎた銘柄だけを更新し、これから先の日付（手入力を含む）は上書きしません。</span>';
         if (is_array($es) && !empty($es['at'])) {

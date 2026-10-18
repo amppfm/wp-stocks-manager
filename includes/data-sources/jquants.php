@@ -568,3 +568,6 @@ add_action('init', function () {
     wp_schedule_event($next->getTimestamp(), 'daily', 'wp_stocks_earnings_sync_daily');
 });
 add_action('wp_stocks_earnings_sync_daily', function () { wp_stocks_jquants_sync_earnings_dates(); });
+
+// JPX（東証）の決算発表予定日一覧からの取得（J-Quants無料プランでは先の予定日が取れないため）
+require_once __DIR__ . '/jpx-earnings.php';
