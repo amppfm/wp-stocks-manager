@@ -82,9 +82,32 @@ function wp_stocks_calendar_page() {
         }
     }
 
+    // J-Quantsから決算予定日を取得（バックグラウンドで実行。件数が多いと数分〜十数分かかる）
+    if (isset($_POST['wp_stocks_sync_earnings']) && current_user_can('manage_options') && function_exists('wp_stocks_jquants_sync_earnings_dates')) {
+        check_admin_referer('wp_stocks_sync_earnings_nonce');
+        delete_option('wp_stocks_earnings_checked');
+        if (!wp_next_scheduled('wp_stocks_earnings_sync_cron')) wp_schedule_single_event(time(), 'wp_stocks_earnings_sync_cron');
+        if (function_exists('spawn_cron')) spawn_cron();
+        echo '<div class="notice notice-info"><p>J-Quantsから決算予定日の取得を開始しました。バックグラウンドで実行されるので、数分後にこのページを開き直してください。</p></div>';
+    }
+
     $view  = in_array($_GET['view'] ?? '', ['list','month'], true) ? $_GET['view'] : 'list';
     $today = date('Y-m-d');
     echo '<div class="wrap"><h1>📅 決算カレンダー</h1>';
+
+    if (function_exists('wp_stocks_jquants_sync_earnings_dates')) {
+        $es = get_option('wp_stocks_earnings_sync_status', []);
+        echo '<form method="post" style="margin:0 0 12px;">';
+        wp_nonce_field('wp_stocks_sync_earnings_nonce');
+        echo '<button type="submit" name="wp_stocks_sync_earnings" class="button">&#x1F504; J-Quantsから決算予定日を取得</button> ';
+        echo '<span class="description">毎日 6:10 にも自動で取得します。未取得の銘柄と、決算日が過ぎた銘柄だけを更新し、これから先の日付（手入力を含む）は上書きしません。</span>';
+        if (is_array($es) && !empty($es['at'])) {
+            echo '<div class="description" style="margin-top:4px;">前回（' . esc_html($es['at']) . '）：更新 ' . intval($es['updated']) . '件／予定なし・未定 ' . intval($es['none']) . '件／失敗 ' . intval($es['failed']) . '件'
+                . (!empty($es['remaining']) ? '／残り ' . intval($es['remaining']) . '件（数分後に続きを実行）' : '')
+                . (!empty($es['first_error']) ? '<br><span style="color:#b32d2e;">エラー：' . esc_html($es['first_error']) . '</span>' : '') . '</div>';
+        }
+        echo '</form>';
+    }
 
     // 表示切り替え
     echo '<div style="margin-bottom:15px;">';
@@ -125,7 +148,7 @@ function wp_stocks_calendar_page() {
     );
     if ($missing_stocks) {
         echo '<h2 style="margin-top:30px;">⚠️ 決算予定日が未取得の銘柄（' . count($missing_stocks) . '件）</h2>';
-        echo '<p class="description">Yahoo Financeがまだ決算予定日を公開していない銘柄です。判明していれば手動で登録できます。</p>';
+        echo '<p class="description">決算予定日がまだ取れていない銘柄です（J-Quantsでも予定日が未定の可能性があります）。判明していれば手動で登録できます。</p>';
         echo '<table class="widefat fixed striped" style="max-width:600px;">';
         echo '<thead><tr><th style="width:80px;">コード</th><th>銘柄名</th><th style="width:260px;">決算予定日を登録</th></tr></thead><tbody>';
         foreach ($missing_stocks as $ms) {
