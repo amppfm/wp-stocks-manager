@@ -22,6 +22,23 @@ function wp_stocks_get_effective_eps_actual($stock) {
     if ($is_usd) {
         return ['value' => $yahoo_eps_actual, 'source' => 'yahoo'];
     }
+    // 直近の本決算がTDnet由来（J-Quants未反映）なら、その実績EPSを使う（J-Quantsの財務情報は約12週間遅れるため）。
+    // Yahooとの比が極端なときは、従来と同じく株式分割の疑いとしてYahoo値にする。
+    static $fy_cache = [];
+    $sid = (int)($stock->id ?? 0);
+    if ($sid > 0 && !isset($fy_cache[$sid]) && function_exists('wp_stocks_get_latest_annual_financials')) {
+        $fy_rows = wp_stocks_get_latest_annual_financials($sid, 1);
+        $fy_cache[$sid] = $fy_rows[0] ?? false;
+    }
+    $fy_t = $fy_cache[$sid] ?? false;
+    if ($fy_t && ($fy_t->source ?? '') === 'tdnet' && (float)($fy_t->eps ?? 0) > 0) {
+        $tde_eps   = (float)$fy_t->eps;
+        $eps_ratio = $yahoo_eps_actual > 0 ? ($tde_eps / $yahoo_eps_actual) : null;
+        if ($eps_ratio !== null && ($eps_ratio < 0.5 || $eps_ratio > 2.0)) {
+            return ['value' => $yahoo_eps_actual, 'source' => 'yahoo_split_suspected'];
+        }
+        return ['value' => $tde_eps, 'source' => 'tdnet'];
+    }
     if ($jquants_eps_actual > 0) {
         $eps_ratio = $yahoo_eps_actual > 0 ? ($jquants_eps_actual / $yahoo_eps_actual) : null;
         if ($eps_ratio !== null && ($eps_ratio < 0.5 || $eps_ratio > 2.0)) {
@@ -313,7 +330,11 @@ function wp_stocks_calc_score_jp($stock) {
 
     // ---------- D. 安全性（非金融20点／金融10点） ----------
     if (!$is_financial) {
-        $eq = floatval($stock->equity_ratio ?? 0);
+        // 直近本決算（J-Quants/TDnet）の自己資本比率を優先する。stocks.equity_ratio（Yahoo由来・週次更新）は無いときだけ使う
+        // ※stock_quarterly_financialsは小数（0.598）、stocksは%（59.8）なので100倍して揃える
+        $eq = ($fy0 && $fy0->equity_ratio !== null && floatval($fy0->equity_ratio) > 0)
+            ? floatval($fy0->equity_ratio) * 100
+            : floatval($stock->equity_ratio ?? 0);
         if ($eq > 0) {
             if     ($eq >= 50) { $pts = 10; $ev = '安全'; }
             elseif ($eq >= 30) { $pts = 6;  $ev = '普通'; }

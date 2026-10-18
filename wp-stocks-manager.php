@@ -445,6 +445,18 @@ function wp_stocks_get_company_info($symbol) {
         $feps   = $manual_feps   ?? ($jquants !== false ? $jquants['forecast_eps'] : null);
         $nxfeps = $manual_nxfeps ?? ($jquants !== false ? $jquants['next_fy_forecast_eps'] : null);
 
+        // J-Quantsの財務情報は約12週間遅れるため、決算短信（TDnet）の会社予想のほうが新しいときは、そちらを予想EPSにする。
+        // 手動入力が最優先（この後の行で上書き）。TDnetの開示日がJ-Quantsの最新開示日より後のときだけで、
+        // J-Quantsが追いつけば（開示日が同じか後になれば）自動でJ-Quantsの値に戻る。
+        if ($manual_feps === null && $jquants !== false && !empty($jquants['disc_date']) && function_exists('wp_stocks_tde_forecast_eps')) {
+            $tde_sid_new = (int)$wpdb->get_var($wpdb->prepare("SELECT id FROM {$wpdb->prefix}stocks WHERE code = %s", $jquants_code));
+            $tfe_new     = $tde_sid_new ? wp_stocks_tde_forecast_eps($tde_sid_new) : null;
+            if ($tfe_new && !empty($tfe_new['disc_at']) && (float)$tfe_new['eps'] > 0
+                && substr((string)$tfe_new['disc_at'], 0, 10) > substr((string)$jquants['disc_date'], 0, 10)) {
+                $result['forward_eps'] = (float)$tfe_new['eps'];
+            }
+        }
+
         // 手動の当期予想EPSがあれば画面表示（forward_eps）にも反映
         if ($manual_feps !== null) $result['forward_eps'] = $manual_feps;
 

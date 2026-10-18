@@ -635,7 +635,7 @@ function wp_stocks_company_page() {
     $eps_actual_info_for_display = wp_stocks_get_effective_eps_actual($stock);
     // 予想EPSが決算短信（TDnet）の会社予想で補われている場合は、出所を表示する
     $eps_fc_tip = '来期予想EPS';
-    if (($stock->forward_eps ?? 0) > 0 && floatval($stock->jquants_forecast_eps ?? 0) <= 0 && floatval($stock->manual_forecast_eps ?? 0) <= 0 && function_exists('wp_stocks_tde_forecast_eps')) {
+    if (($stock->forward_eps ?? 0) > 0 && floatval($stock->manual_forecast_eps ?? 0) <= 0 && function_exists('wp_stocks_tde_forecast_eps')) {
         $tfe = wp_stocks_tde_forecast_eps((int)$id);
         if ($tfe && abs($tfe['eps'] - (float)$stock->forward_eps) < 0.01) $eps_fc_tip = '会社予想（決算短信・TDnet）で補完' . ($tfe['cons'] !== null ? '／概算コンセンサス約' . number_format($tfe['cons'], 1) . '円' : '');
     }
@@ -643,7 +643,7 @@ function wp_stocks_company_page() {
         ['PER（実績）', ($stock->per ?? 0) > 0 ? number_format($stock->per, 1) . '倍' : 'N/A', $per_color, 'PER<15で割安'],
         ['PER（予想）', ($stock->forward_per ?? 0) > 0 ? number_format($stock->forward_per, 1) . '倍' : 'N/A', $per_color, '来期予想PER'],
         ['PBR',         ($stock->pbr ?? 0) > 0 ? number_format($stock->pbr, 2) . '倍' : 'N/A', $pbr_color, 'PBR<1で割安'],
-        ['EPS（実績）', ($eps_actual_info_for_display['value'] ?? 0) != 0 ? number_format($eps_actual_info_for_display['value'], 1) . '円' . ($eps_actual_info_for_display['source'] === 'yahoo_split_suspected' ? '（分割疑いによりYahoo値）' : '') : 'N/A', '#555', '1株当たり利益（J-Quants優先、無ければYahoo）'],
+        ['EPS（実績）', ($eps_actual_info_for_display['value'] ?? 0) != 0 ? number_format($eps_actual_info_for_display['value'], 1) . '円' . ($eps_actual_info_for_display['source'] === 'yahoo_split_suspected' ? '（分割疑いによりYahoo値）' : ($eps_actual_info_for_display['source'] === 'tdnet' ? '（決算短信・TDnet）' : '')) : 'N/A', '#555', '1株当たり利益（直近の決算短信 ＞ J-Quants ＞ Yahoo）'],
         ['EPS（予想）', ($stock->forward_eps ?? 0) != 0 ? number_format($stock->forward_eps, 1) . '円' : 'N/A', '#555', $eps_fc_tip],
         ['ROE',         ($stock->roe ?? 0) != 0 ? number_format($stock->roe, 1) . '%' : 'N/A', $roe_color, 'ROE>=15%が優良'],
         ['ROA',         ($stock->roa ?? 0) != 0 ? number_format($stock->roa, 1) . '%' : 'N/A', '#555', '総資産利益率'],

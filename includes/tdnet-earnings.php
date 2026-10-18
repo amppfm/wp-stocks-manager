@@ -347,11 +347,11 @@ function wp_stocks_tde_forecast_eps($stock_id) {
     global $wpdb;
     if (!wp_stocks_tde_ensure_table()) return null;
     $r = $wpdb->get_row($wpdb->prepare(
-        "SELECT fc_eps, fc_ni_vs_cons, fy_end FROM " . wp_stocks_tde_results_table() . " WHERE stock_id = %d AND fc_eps > 0 ORDER BY COALESCE(disclosed_at, period_end) DESC LIMIT 1", $stock_id));
+        "SELECT fc_eps, fc_ni_vs_cons, fy_end, COALESCE(disclosed_at, period_end) AS disc_at FROM " . wp_stocks_tde_results_table() . " WHERE stock_id = %d AND fc_eps > 0 ORDER BY COALESCE(disclosed_at, period_end) DESC LIMIT 1", $stock_id));
     if (!$r) return null;
     $cons = null;
     if ($r->fc_ni_vs_cons !== null && (float)$r->fc_ni_vs_cons > -90) $cons = (float)$r->fc_eps / (1 + (float)$r->fc_ni_vs_cons / 100);
-    return ['eps' => (float)$r->fc_eps, 'cons' => $cons, 'fy_end' => $r->fy_end];
+    return ['eps' => (float)$r->fc_eps, 'cons' => $cons, 'fy_end' => $r->fy_end, 'disc_at' => $r->disc_at];
 }
 
 // 直近の「業績予想の修正」ニュース（ニュース履歴から。決算短信の表が無い修正のお知らせも拾う）
