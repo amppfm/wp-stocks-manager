@@ -287,6 +287,20 @@ function wp_stocks_calc_score_jp($stock) {
     $eps_actual_info = wp_stocks_get_effective_eps_actual($stock);
     $eps_fy_actual   = $eps_actual_info['source'] === 'jquants' ? $eps_actual_info['value'] : 0; // 分割疑い・Yahoo代用時は予想成長率を計算しない
     $feps            = floatval($stock->jquants_forecast_eps ?? 0);
+    // 直近の本決算がTDnet由来（J-Quants未反映）のときは、同じ決算短信の「今期予想EPS」と「実績EPS」で比べる。
+    // 同じ書類どうしなので株式数の基準がそろい、J-Quants側の古い値や分割の影響を受けない。
+    // 予想の対象期が「直近本決算の翌期」でないとき、実績EPSが無いときは、従来どおりJ-Quantsの値を使う。
+    if ($fy0 && ($fy0->source ?? '') === 'tdnet' && floatval($fy0->eps ?? 0) > 0
+        && !empty($fy0->period_end) && function_exists('wp_stocks_tde_forecast_eps')) {
+        $tde_fc = wp_stocks_tde_forecast_eps($stock->id ?? 0);
+        if ($tde_fc && floatval($tde_fc['eps']) > 0 && !empty($tde_fc['fy_end'])) {
+            $next_fy_end = sprintf('%04d-%s', (int)substr($fy0->period_end, 0, 4) + 1, substr($fy0->period_end, 5, 2));
+            if (substr(str_replace('/', '-', $tde_fc['fy_end']), 0, 7) === $next_fy_end) {
+                $eps_fy_actual = floatval($fy0->eps);
+                $feps          = floatval($tde_fc['eps']);
+            }
+        }
+    }
     if ($eps_fy_actual > 0 && $feps > 0) {
         $f_growth = ($feps - $eps_fy_actual) / $eps_fy_actual * 100;
         if     ($f_growth >= 10) { $pts = 5; $ev = '増益予想'; }
