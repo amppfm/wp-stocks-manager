@@ -314,6 +314,8 @@ function wp_stocks_calc_score_jp($stock) {
     $eps_actual_info = wp_stocks_get_effective_eps_actual($stock);
     $eps_fy_actual   = $eps_actual_info['source'] === 'jquants' ? $eps_actual_info['value'] : 0; // 分割疑い・Yahoo代用時は予想成長率を計算しない
     $feps            = floatval($stock->jquants_forecast_eps ?? 0);
+    // 本決算の直後などJ-Quantsの当期予想が空のときは、来期予想が実質いまの期の会社予想なので、それを使う
+    if ($feps <= 0) $feps = floatval($stock->jquants_next_fy_forecast_eps ?? 0);
     // 直近の本決算がTDnet由来（J-Quants未反映）のときは、同じ決算短信の「今期予想EPS」と「実績EPS」で比べる。
     // 同じ書類どうしなので株式数の基準がそろい、J-Quants側の古い値や分割の影響を受けない。
     // 予想の対象期が「直近本決算の翌期」でないとき、実績EPSが無いときは、従来どおりJ-Quantsの値を使う。

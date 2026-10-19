@@ -445,6 +445,7 @@ function wp_stocks_get_company_info($symbol) {
         $feps   = $manual_feps   ?? ($jquants !== false ? $jquants['forecast_eps'] : null);
         $nxfeps = $manual_nxfeps ?? ($jquants !== false ? $jquants['next_fy_forecast_eps'] : null);
 
+        $fwd_from_tde = false; // TDnetの予想で予想EPSを決めたか（決めたなら下の来期予想の代用はしない）
         // J-Quantsの財務情報は約12週間遅れるため、決算短信（TDnet）の会社予想のほうが新しいときは、そちらを予想EPSにする。
         // 手動入力が最優先（この後の行で上書き）。TDnetの開示日がJ-Quantsの最新開示日より後のときだけで、
         // J-Quantsが追いつけば（開示日が同じか後になれば）自動でJ-Quantsの値に戻る。
@@ -454,11 +455,23 @@ function wp_stocks_get_company_info($symbol) {
             if ($tfe_new && !empty($tfe_new['disc_at']) && (float)$tfe_new['eps'] > 0
                 && substr((string)$tfe_new['disc_at'], 0, 10) > substr((string)$jquants['disc_date'], 0, 10)) {
                 $result['forward_eps'] = (float)$tfe_new['eps'];
+                $fwd_from_tde = true;
             }
         }
 
         // 手動の当期予想EPSがあれば画面表示（forward_eps）にも反映
         if ($manual_feps !== null) $result['forward_eps'] = $manual_feps;
+
+        // 本決算の直後などJ-Quantsの当期予想(FEPS)が空のときは、来期予想(NxFEPS)が実質いまの期の会社予想。
+        // 手動・J-Quants当期予想・新しい決算短信(TDnet)の予想が無いときは、Yahooのアナリスト予想より会社予想を優先する。
+        if (empty($feps) && !empty($nxfeps) && floatval($nxfeps) > 0 && !$fwd_from_tde) {
+            $result['forward_eps'] = floatval($nxfeps);
+            // 予想PERも会社予想ベースにそろえる（現在株価÷予想EPS）
+            $price_fw = wp_stocks_get_price($symbol);
+            if ($price_fw && !empty($price_fw['c']) && $price_fw['c'] > 0) {
+                $result['forward_per'] = round($price_fw['c'] / floatval($nxfeps), 2);
+            }
+        }
 
         // Yahoo・J-Quants・手動のいずれにも予想EPSが無い場合だけ、決算短信（TDnet）の会社予想EPSで補う
         if (empty($result['forward_eps']) || $result['forward_eps'] <= 0) {
