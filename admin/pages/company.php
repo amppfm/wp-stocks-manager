@@ -62,6 +62,15 @@ function wp_stocks_company_page() {
     $stock = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}stocks WHERE id = %d", $id));
     if (!$stock) { echo '<p>銘柄が見つかりません。</p></div>'; return; }
 
+    // 自己資本比率は、スコア計算と同じく直近本決算（J-Quants/TDnet）の値を優先して表示する
+    // ※stock_quarterly_financialsは小数（0.598）、stocksは%（59.8）なので100倍して揃える（日本株のみ）
+    if (($stock->currency ?? 'JPY') !== 'USD') {
+        $fy_eq = wp_stocks_get_latest_annual_financials($stock->id, 1);
+        if (!empty($fy_eq[0]) && floatval($fy_eq[0]->equity_ratio) > 0) {
+            $stock->equity_ratio = floatval($fy_eq[0]->equity_ratio) * 100;
+        }
+    }
+
     if (isset($_GET['message'])) {
         $m = $_GET['message'];
         if ($m === 'watchlist_saved') echo '<div class="updated"><p>注目株の設定を変更しました。</p></div>';
