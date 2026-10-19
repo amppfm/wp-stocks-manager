@@ -126,11 +126,16 @@ function wp_stocks_get_latest_annual_financials($stock_id, $limit = 2) {
 //   売上成長率はスコアの「売上成長率」と同じ計算。利益成長率は純利益の前期比（前期が黒字のときだけ）
 //   ※stocks.revenue_growth / earnings_growth はYahooの直近四半期の前年同期比で、定義が別
 function wp_stocks_get_annual_growth($stock) {
-    $out = ['revenue' => null, 'net_income' => null];
+    $out = ['revenue' => null, 'net_income' => null, 'profit_margin' => null];
     if (($stock->currency ?? 'JPY') === 'USD') return $out;
     $fy = wp_stocks_get_latest_annual_financials($stock->id ?? 0, 2);
-    if (count($fy) < 2) return $out;
+    if (!$fy) return $out;
     $fy0 = $fy[0];
+    // 利益率は直近本決算だけで計算できる（スコアの「利益率」と同じ：純利益÷売上）
+    if (!empty($fy0->revenue) && $fy0->revenue > 0 && $fy0->net_income !== null) {
+        $out['profit_margin'] = $fy0->net_income / $fy0->revenue * 100;
+    }
+    if (count($fy) < 2) return $out;
     $fy1 = $fy[1];
     if (!empty($fy1->revenue) && $fy1->revenue > 0 && $fy0->revenue !== null) {
         $out['revenue'] = ($fy0->revenue - $fy1->revenue) / $fy1->revenue * 100;
@@ -263,7 +268,7 @@ function wp_stocks_calc_score_jp($stock) {
         $profit_margin = null; $pm_src = '';
         if ($fy0 && !empty($fy0->revenue) && $fy0->net_income !== null) {
             $profit_margin = $fy0->net_income / $fy0->revenue * 100;
-            $pm_src = 'J-Quants';
+            $pm_src = (($fy0->source ?? '') === 'tdnet') ? '決算短信・TDnet' : 'J-Quants';
         } elseif (!empty($stock->profit_margin)) {
             $profit_margin = floatval($stock->profit_margin);
             $pm_src = 'Yahoo';
@@ -361,11 +366,15 @@ function wp_stocks_calc_score_jp($stock) {
 
     // ---------- D. 安全性（非金融20点／金融10点） ----------
     if (!$is_financial) {
-        // 直近本決算（J-Quants/TDnet）の自己資本比率を優先する。stocks.equity_ratio（Yahoo由来・週次更新）は無いときだけ使う
-        // ※stock_quarterly_financialsは小数（0.598）、stocksは%（59.8）なので100倍して揃える
-        $eq = ($fy0 && $fy0->equity_ratio !== null && floatval($fy0->equity_ratio) > 0)
-            ? floatval($fy0->equity_ratio) * 100
-            : floatval($stock->equity_ratio ?? 0);
+        // 手動入力（manual_equity_ratio）が最優先。次に直近本決算（J-Quants/TDnet）、どちらも無いときだけstocks.equity_ratio（Yahoo由来・週次更新）
+        // ※stock_quarterly_financialsは小数（0.598）、stocksと手動入力は%（59.8）なので、決算の値だけ100倍して揃える
+        if (($stock->manual_equity_ratio ?? null) !== null && $stock->manual_equity_ratio !== '') {
+            $eq = floatval($stock->manual_equity_ratio);
+        } elseif ($fy0 && $fy0->equity_ratio !== null && floatval($fy0->equity_ratio) > 0) {
+            $eq = floatval($fy0->equity_ratio) * 100;
+        } else {
+            $eq = floatval($stock->equity_ratio ?? 0);
+        }
         if ($eq > 0) {
             if     ($eq >= 50) { $pts = 10; $ev = '安全'; }
             elseif ($eq >= 30) { $pts = 6;  $ev = '普通'; }
