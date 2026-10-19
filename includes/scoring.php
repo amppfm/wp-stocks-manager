@@ -178,7 +178,7 @@ function wp_stocks_calc_score_jp($stock) {
     // 配当性向：J-Quantsの値が無い行（TDnet由来など）は、年間配当÷EPSから計算して補う
     if ($fy0 && !(floatval($fy0->payout_ratio_annual ?? 0) > 0)
         && floatval($fy0->dividend_annual ?? 0) > 0 && floatval($fy0->eps ?? 0) > 0) {
-        $fy0->payout_ratio_annual = floatval($fy0->dividend_annual) / floatval($fy0->eps) * 100;
+        $fy0->payout_ratio_annual = floatval($fy0->dividend_annual) / floatval($fy0->eps); // DBと同じ小数（0.6=60%）
     }
     $fy1 = $fy[1] ?? null; // 前期本決算
 
@@ -368,7 +368,7 @@ function wp_stocks_calc_score_jp($stock) {
     }
 
     if ($fy0 && $fy0->payout_ratio_annual !== null && $fy0->payout_ratio_annual > 0) {
-        $payout = $fy0->payout_ratio_annual;
+        $payout = $fy0->payout_ratio_annual * 100; // DBは小数（0.6=60%）なので%に直して判定する
         if ($payout >= 30 && $payout <= 60) { $pts = 5; $ev = '健全'; }
         elseif ($payout > 80) {
             $pts = 0; $ev = '過大';
