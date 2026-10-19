@@ -122,6 +122,25 @@ function wp_stocks_get_latest_annual_financials($stock_id, $limit = 2) {
     return array_slice($out, 0, $limit);
 }
 
+// 通期（本決算）の前期比成長率。日本株で本決算が2期分そろっているときだけ値が入る（無ければnull）
+//   売上成長率はスコアの「売上成長率」と同じ計算。利益成長率は純利益の前期比（前期が黒字のときだけ）
+//   ※stocks.revenue_growth / earnings_growth はYahooの直近四半期の前年同期比で、定義が別
+function wp_stocks_get_annual_growth($stock) {
+    $out = ['revenue' => null, 'net_income' => null];
+    if (($stock->currency ?? 'JPY') === 'USD') return $out;
+    $fy = wp_stocks_get_latest_annual_financials($stock->id ?? 0, 2);
+    if (count($fy) < 2) return $out;
+    $fy0 = $fy[0];
+    $fy1 = $fy[1];
+    if (!empty($fy1->revenue) && $fy1->revenue > 0 && $fy0->revenue !== null) {
+        $out['revenue'] = ($fy0->revenue - $fy1->revenue) / $fy1->revenue * 100;
+    }
+    if (!empty($fy1->net_income) && $fy1->net_income > 0 && $fy0->net_income !== null) {
+        $out['net_income'] = ($fy0->net_income - $fy1->net_income) / $fy1->net_income * 100;
+    }
+    return $out;
+}
+
 // --------------------------------------------------
 // 財務スコア（日本株 v2）の各指標について、「どんな基準で何点にしたか」の説明文
 // 画面（銘柄ページの財務スコアカード・判定の説明）に「理由」として出す。基準を変えたら、ここも直すこと

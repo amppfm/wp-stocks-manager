@@ -672,13 +672,23 @@ function wp_stocks_company_page() {
     // ④ 業績指標カード
     echo '<h3>業績指標</h3>';
     echo '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:25px;">';
-    foreach ([
-        ['売上成長率', number_format($stock->revenue_growth ?? 0, 1) . '%', $rg_color],
-        ['利益成長率', number_format($stock->earnings_growth ?? 0, 1) . '%', $eg_color],
+    // 成長率は、通期（本決算の前期比）があれば先に並べ、Yahooの直近四半期の値も続けて表示する
+    // ※通期の数字がない銘柄（米国株・本決算が2期分そろっていない銘柄）は、Yahooの行だけになる
+    $fy_growth  = wp_stocks_get_annual_growth($stock);
+    $perf_cards = [];
+    if ($fy_growth['revenue'] !== null) {
+        $perf_cards[] = ['売上成長率（通期・前期比）', number_format($fy_growth['revenue'], 1) . '%', $fy_growth['revenue'] >= 0 ? '#e74c3c' : '#3498db'];
+    }
+    $perf_cards[] = ['売上成長率（直近四半期・Yahoo）', number_format($stock->revenue_growth ?? 0, 1) . '%', $rg_color];
+    if ($fy_growth['net_income'] !== null) {
+        $perf_cards[] = ['利益成長率（通期・純利益の前期比）', number_format($fy_growth['net_income'], 1) . '%', $fy_growth['net_income'] >= 0 ? '#e74c3c' : '#3498db'];
+    }
+    $perf_cards[] = ['利益成長率（直近四半期・Yahoo）', number_format($stock->earnings_growth ?? 0, 1) . '%', $eg_color];
+    foreach (array_merge($perf_cards, [
         ['利益率',     number_format($stock->profit_margin ?? 0, 1) . '%', $pm_color],
         ['従業員数',   number_format($stock->employees ?? 0) . '人', '#555'],
         ['時価総額',   ($stock->market_cap ?? 0) > 0 ? number_format(intval($stock->market_cap) / 100000000) . '億円' : 'N/A', '#555'],
-    ] as [$label, $val, $color]) {
+    ]) as [$label, $val, $color]) {
         echo '<div style="background:#fff;border:1px solid #ddd;border-radius:6px;padding:12px 16px;text-align:center;min-width:110px;">';
         echo '<div style="font-size:11px;color:#888;margin-bottom:4px;">' . $label . '</div>';
         echo '<div style="font-size:18px;font-weight:bold;color:' . $color . ';">' . esc_html($val) . '</div>';
@@ -2377,8 +2387,15 @@ function wp_stocks_company_page() {
     if ($stock->dividend_yield > 0) $analysis_text .= "配当利回り：" . number_format($stock->dividend_yield, 2) . "%\n";
     if ($stock->equity_ratio > 0)   $analysis_text .= "自己資本比率：" . number_format($stock->equity_ratio, 1) . "%\n";
     $analysis_text .= "\n■ 業績指標\n";
-    $analysis_text .= "売上成長率：" . ($stock->revenue_growth >= 0 ? '+' : '') . number_format($stock->revenue_growth, 1) . "%\n";
-    $analysis_text .= "利益成長率：" . ($stock->earnings_growth >= 0 ? '+' : '') . number_format($stock->earnings_growth, 1) . "%\n";
+    $ai_growth = wp_stocks_get_annual_growth($stock);
+    if ($ai_growth['revenue'] !== null) {
+        $analysis_text .= "売上成長率（通期・前期比）：" . ($ai_growth['revenue'] >= 0 ? '+' : '') . number_format($ai_growth['revenue'], 1) . "%\n";
+    }
+    $analysis_text .= "売上成長率（直近四半期・前年同期比、Yahoo）：" . ($stock->revenue_growth >= 0 ? '+' : '') . number_format($stock->revenue_growth, 1) . "%\n";
+    if ($ai_growth['net_income'] !== null) {
+        $analysis_text .= "利益成長率（通期・純利益の前期比）：" . ($ai_growth['net_income'] >= 0 ? '+' : '') . number_format($ai_growth['net_income'], 1) . "%\n";
+    }
+    $analysis_text .= "利益成長率（直近四半期・前年同期比、Yahoo）：" . ($stock->earnings_growth >= 0 ? '+' : '') . number_format($stock->earnings_growth, 1) . "%\n";
     $analysis_text .= "利益率：" . number_format($stock->profit_margin, 1) . "%\n";
     if ($stock->revenue > 0)    $analysis_text .= "売上高：" . number_format($stock->revenue / 1000000) . "百万円\n";
     if ($stock->net_income > 0) $analysis_text .= "純利益：" . number_format($stock->net_income / 1000000) . "百万円\n";
