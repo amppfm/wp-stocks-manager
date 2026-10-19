@@ -727,11 +727,29 @@ add_action('admin_post_update_manual_forecast_eps', function() {
         'manual_next_fy_forecast_eps' => $manual_next_fy_forecast_eps,
     ], ['id' => $id]);
 
+    // J-Quants由来5項目の手動上書き（空欄=NULL=自動取得値を使う。フォームに無い項目は触らない）
+    $manual_update = [];
+    foreach (['manual_eps', 'manual_bps', 'manual_roe', 'manual_equity_ratio', 'manual_forecast_dividend_annual'] as $mcol) {
+        if (!isset($_POST[$mcol])) continue;
+        $raw = trim((string) wp_unslash($_POST[$mcol]));
+        $manual_update[$mcol] = ($raw === '' || !is_numeric($raw)) ? null : (float) $raw;
+    }
+    if ($manual_update) {
+        $wpdb->update($wpdb->prefix . 'stocks', $manual_update, ['id' => $id]);
+    }
+
     // 保存直後にPEG等を再計算して反映する（次回cronを待たせない）
     $stock = $wpdb->get_row($wpdb->prepare("SELECT code, currency FROM {$wpdb->prefix}stocks WHERE id = %d", $id));
     if ($stock) {
         $symbol = ($stock->currency === 'USD') ? $stock->code : $stock->code . '.T';
         wp_stocks_save_company_info($id, $symbol);
+    }
+
+    // 手動上書き値を表示用の列（roe/equity_ratio/dividend_yield/pbr）へ反映する
+    // （企業情報の再取得に失敗した場合でも反映されるよう、ここでも直接書く）
+    $ov = wp_stocks_manual_overrides_for($id);
+    if ($ov) {
+        $wpdb->update($wpdb->prefix . 'stocks', $ov, ['id' => $id]);
     }
 
     wp_redirect(admin_url('admin.php?page=wp-stocks-company&stock_id=' . $id . '&message=manual_forecast_eps_saved'));

@@ -652,7 +652,7 @@ function wp_stocks_company_page() {
         ['PER（実績）', ($stock->per ?? 0) > 0 ? number_format($stock->per, 1) . '倍' : 'N/A', $per_color, 'PER<15で割安'],
         ['PER（予想）', ($stock->forward_per ?? 0) > 0 ? number_format($stock->forward_per, 1) . '倍' : 'N/A', $per_color, '来期予想PER'],
         ['PBR',         ($stock->pbr ?? 0) > 0 ? number_format($stock->pbr, 2) . '倍' : 'N/A', $pbr_color, 'PBR<1で割安'],
-        ['EPS（実績）', ($eps_actual_info_for_display['value'] ?? 0) != 0 ? number_format($eps_actual_info_for_display['value'], 1) . '円' . ($eps_actual_info_for_display['source'] === 'yahoo_split_suspected' ? '（分割疑いによりYahoo値）' : ($eps_actual_info_for_display['source'] === 'tdnet' ? '（決算短信・TDnet）' : '')) : 'N/A', '#555', '1株当たり利益（直近の決算短信 ＞ J-Quants ＞ Yahoo）'],
+        ['EPS（実績）', ($eps_actual_info_for_display['value'] ?? 0) != 0 ? number_format($eps_actual_info_for_display['value'], 1) . '円' . ($eps_actual_info_for_display['source'] === 'yahoo_split_suspected' ? '（分割疑いによりYahoo値）' : ($eps_actual_info_for_display['source'] === 'tdnet' ? '（決算短信・TDnet）' : ($eps_actual_info_for_display['source'] === 'manual' ? '（手動入力）' : ''))) : 'N/A', '#555', '1株当たり利益（直近の決算短信 ＞ J-Quants ＞ Yahoo）'],
         ['EPS（予想）', ($stock->forward_eps ?? 0) != 0 ? number_format($stock->forward_eps, 1) . '円' : 'N/A', '#555', $eps_fc_tip],
         ['ROE',         ($stock->roe ?? 0) != 0 ? number_format($stock->roe, 1) . '%' : 'N/A', $roe_color, 'ROE>=15%が優良'],
         ['ROA',         ($stock->roa ?? 0) != 0 ? number_format($stock->roa, 1) . '%' : 'N/A', '#555', '総資産利益率'],
@@ -2516,6 +2516,11 @@ function wp_stocks_company_page() {
         echo '<table class="form-table"><tbody>';
         echo '<tr><th>当期予想EPS（円）</th><td><input type="number" name="manual_forecast_eps" value="' . esc_attr(($stock->manual_forecast_eps ?? 0) > 0 ? $stock->manual_forecast_eps : '') . '" step="0.01" style="width:150px;" placeholder="自動取得"></td></tr>';
         echo '<tr><th>来期予想EPS（円）</th><td><input type="number" name="manual_next_fy_forecast_eps" value="' . esc_attr(($stock->manual_next_fy_forecast_eps ?? 0) > 0 ? $stock->manual_next_fy_forecast_eps : '') . '" step="0.01" style="width:150px;" placeholder="自動取得"></td></tr>';
+        echo '<tr><th>実績EPS（円）</th><td><input type="number" name="manual_eps" value="' . esc_attr($stock->manual_eps ?? '') . '" step="0.01" style="width:150px;" placeholder="自動取得"><span class="description"> 赤字はマイナスで入力</span></td></tr>';
+        echo '<tr><th>BPS（円）</th><td><input type="number" name="manual_bps" value="' . esc_attr($stock->manual_bps ?? '') . '" step="0.01" style="width:150px;" placeholder="自動取得"><span class="description"> 入力するとPBR（現在株価÷BPS）も計算し直します</span></td></tr>';
+        echo '<tr><th>ROE（%）</th><td><input type="number" name="manual_roe" value="' . esc_attr($stock->manual_roe ?? '') . '" step="0.01" style="width:150px;" placeholder="自動取得"></td></tr>';
+        echo '<tr><th>自己資本比率（%）</th><td><input type="number" name="manual_equity_ratio" value="' . esc_attr($stock->manual_equity_ratio ?? '') . '" step="0.01" style="width:150px;" placeholder="自動取得"></td></tr>';
+        echo '<tr><th>予想年間配当（円）</th><td><input type="number" name="manual_forecast_dividend_annual" value="' . esc_attr($stock->manual_forecast_dividend_annual ?? '') . '" step="0.01" style="width:150px;" placeholder="自動取得"><span class="description"> 配当利回り＝年間配当÷現在株価で計算します。空欄で保存すると自動取得に戻ります</span></td></tr>';
         echo '</tbody></table>';
         echo '<p style="margin-top:8px;"><button type="submit" class="button button-primary">手動値を保存</button></p>';
         echo '</form>';

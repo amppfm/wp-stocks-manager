@@ -229,7 +229,7 @@ function wp_stocks_jh_record_valuation($stock, $date = null) {
         'price'          => $price,
         'actual_eps'     => $actual,
         'forecast_eps'   => $feps,
-        'bps'            => (float)($stock->jquants_bps ?? 0) > 0 ? (float)$stock->jquants_bps : null,
+        'bps'            => (($stock->manual_bps ?? null) !== null && (float)$stock->manual_bps > 0) ? (float)$stock->manual_bps : ((float)($stock->jquants_bps ?? 0) > 0 ? (float)$stock->jquants_bps : null),
         'actual_per'     => ($price !== null && $actual !== null) ? round($price / $actual, 2) : null,
         'forecast_per'   => $price !== null ? round($price / $feps, 2) : null,
         'pbr'            => (float)($stock->pbr ?? 0) > 0 ? (float)$stock->pbr : null,

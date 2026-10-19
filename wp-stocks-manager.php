@@ -16,7 +16,7 @@ if (!get_option('wp_stocks_temp_opcache_reset_done')) {
     update_option('wp_stocks_temp_opcache_reset_done', 1);
 }
 
-define('WP_STOCKS_VERSION', '5.5');
+define('WP_STOCKS_VERSION', '5.6');
 define('WP_STOCKS_LOG_DAYS', 30);
 
 // --------------------------------------------------
@@ -554,6 +554,39 @@ function wp_stocks_get_sector_avg_per($sector, $is_usd, $exclude_stock_id = null
 // --------------------------------------------------
 // DB保存系関数
 // --------------------------------------------------
+// --------------------------------------------------
+// J-Quants由来項目の手動上書き値を、画面が読む列向けの配列にして返す
+//   manual_*がNULL（空欄）の項目は含めない＝自動取得値のまま。
+//   ROE・自己資本比率は%のまま、配当利回り=年間配当÷現在株価×100、PBR=現在株価÷BPS で計算する。
+//   （実績EPSは wp_stocks_get_effective_eps_actual() 側で優先、BPSは判定履歴側で優先）
+// --------------------------------------------------
+function wp_stocks_manual_overrides_for($stock_id) {
+    global $wpdb;
+    $m = $wpdb->get_row($wpdb->prepare(
+        "SELECT manual_bps, manual_roe, manual_equity_ratio, manual_forecast_dividend_annual FROM {$wpdb->prefix}stocks WHERE id = %d",
+        $stock_id
+    ));
+    if (!$m) return [];
+
+    $out = [];
+    if ($m->manual_roe !== null)          $out['roe']          = (float)$m->manual_roe;
+    if ($m->manual_equity_ratio !== null) $out['equity_ratio'] = (float)$m->manual_equity_ratio;
+
+    $has_div = ($m->manual_forecast_dividend_annual !== null);
+    $has_bps = ($m->manual_bps !== null && (float)$m->manual_bps > 0);
+    if ($has_div || $has_bps) {
+        $price = (float)$wpdb->get_var($wpdb->prepare(
+            "SELECT price FROM {$wpdb->prefix}stock_prices WHERE stock_id = %d ORDER BY datetime DESC LIMIT 1",
+            $stock_id
+        ));
+        if ($price > 0) {
+            if ($has_div) $out['dividend_yield'] = (float)$m->manual_forecast_dividend_annual / $price * 100;
+            if ($has_bps) $out['pbr']            = $price / (float)$m->manual_bps;
+        }
+    }
+    return $out;
+}
+
 function wp_stocks_save_company_info($stock_id, $symbol) {
     global $wpdb;
     $info = wp_stocks_get_company_info($symbol);
@@ -574,6 +607,8 @@ function wp_stocks_save_company_info($stock_id, $symbol) {
         unset($info['sector']);
     }
 
+    // J-Quants由来項目の手動上書き（manual_*が入っている項目は自動取得値より優先）
+    $info = array_merge($info, wp_stocks_manual_overrides_for($stock_id));
     $result = $wpdb->update($wpdb->prefix . 'stocks', $info, ['id' => $stock_id]) !== false;
     if ($result) wp_stocks_log('info', 'company_info', $symbol, '企業情報を更新しました');
     return $result;

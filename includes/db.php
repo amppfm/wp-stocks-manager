@@ -353,6 +353,11 @@ function wp_stocks_manager_create_tables() {
         // 「market」列自体はJ-Quants由来の自動判定値と共用のため、J-Quants値がnullの場合のみ
         // このmanual_market_nameがmarketへ反映される（wp_stocks_jquants_sync_stock()側で判定）
         'manual_market_name'               => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_market_name VARCHAR(30) DEFAULT '' AFTER manual_next_fy_forecast_eps",
+        'manual_eps'                       => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_eps FLOAT DEFAULT NULL AFTER manual_market_name",
+        'manual_bps'                       => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_bps FLOAT DEFAULT NULL AFTER manual_eps",
+        'manual_roe'                       => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_roe FLOAT DEFAULT NULL AFTER manual_bps",
+        'manual_equity_ratio'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_equity_ratio FLOAT DEFAULT NULL AFTER manual_roe",
+        'manual_forecast_dividend_annual'  => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_forecast_dividend_annual FLOAT DEFAULT NULL AFTER manual_equity_ratio",
     ];
 
     foreach ($new_cols as $col => $sql) {

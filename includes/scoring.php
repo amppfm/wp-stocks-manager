@@ -19,6 +19,11 @@ function wp_stocks_get_effective_eps_actual($stock) {
     $is_usd             = ($stock->currency ?? 'JPY') === 'USD';
     $yahoo_eps_actual   = $stock->eps ?? 0;
     $jquants_eps_actual = $stock->jquants_eps ?? 0;
+    // 手動入力（manual_eps）があれば最優先（NULL=未入力。赤字のマイナス値も有効）
+    $manual_eps = $stock->manual_eps ?? null;
+    if ($manual_eps !== null && $manual_eps !== '') {
+        return ['value' => (float)$manual_eps, 'source' => 'manual'];
+    }
     if ($is_usd) {
         return ['value' => $yahoo_eps_actual, 'source' => 'yahoo'];
     }
