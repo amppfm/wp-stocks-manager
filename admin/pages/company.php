@@ -72,6 +72,10 @@ function wp_stocks_company_page() {
         }
     }
 
+    // PER（実績）は、画面のEPS（実績）と同じ物差し（現在株価÷実効実績EPS）にそろえる（スコアの「PER業種比」と同じ値）
+    // ※米国株、EPSが取れない・赤字の銘柄は、これまでのYahoo/FMP由来のPERのまま
+    $stock->per = wp_stocks_get_effective_per($stock);
+
     if (isset($_GET['message'])) {
         $m = $_GET['message'];
         if ($m === 'watchlist_saved') echo '<div class="updated"><p>注目株の設定を変更しました。</p></div>';

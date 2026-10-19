@@ -55,6 +55,31 @@ function wp_stocks_get_effective_eps_actual($stock) {
 }
 
 // --------------------------------------------------
+// PER（実績）= 現在株価 ÷ 実効実績EPS。画面の「EPS（実績）」と同じ物差しにそろえる
+//   実効実績EPSは wp_stocks_get_effective_eps_actual()（手動＞TDnet＞J-Quants＞Yahoo）。
+//   現在株価は stock_prices の最新行（銘柄ページの株価と同じ）。
+//   米国株、株価・EPSが取れない銘柄、赤字（EPS<=0）の銘柄は、stocks.per（Yahoo/FMP由来）のまま返す。
+// --------------------------------------------------
+function wp_stocks_get_effective_per($stock) {
+    global $wpdb;
+    $stock_per = floatval($stock->per ?? 0);
+    if (($stock->currency ?? 'JPY') === 'USD') return $stock_per;
+    $sid = (int) ($stock->id ?? 0);
+    if ($sid <= 0) return $stock_per;
+    $eps = floatval(wp_stocks_get_effective_eps_actual($stock)['value'] ?? 0);
+    if ($eps <= 0) return $stock_per;
+    static $price_cache = [];
+    if (!array_key_exists($sid, $price_cache)) {
+        $price_cache[$sid] = floatval($wpdb->get_var($wpdb->prepare(
+            "SELECT price FROM {$wpdb->prefix}stock_prices WHERE stock_id = %d ORDER BY datetime DESC LIMIT 1", $sid
+        )));
+    }
+    $price = $price_cache[$sid];
+    if ($price <= 0) return $stock_per;
+    return $price / $eps;
+}
+
+// --------------------------------------------------
 // 適正株価計算: EPS × セクター平均PER（自社PERは使わないため循環参照なし）
 // 戻り値: ['actual' => 実績ベース適正株価 or null, 'forward' => 予想ベース適正株価 or null,
 //          'sector_avg_per' => 実績ベースの基準PER or null, 'sector_avg_per_forward' => 予想ベースの基準PER or null]
@@ -223,7 +248,8 @@ function wp_stocks_calc_score_jp($stock) {
     };
 
     // ---------- A. バリュー（20点） ----------
-    $per = floatval($stock->per ?? 0);
+    // PER（実績）は、画面のEPS（実績）と同じ物差し（現在株価÷実効実績EPS）で評価する
+    $per = wp_stocks_get_effective_per($stock);
     $avg_per_info   = wp_stocks_get_sector_avg_per($sector, false, $stock->id ?? null, false, $stock->market ?? '');
     $sector_avg_per = $avg_per_info['value'];
     if ($per > 0 && $sector_avg_per > 0) {
