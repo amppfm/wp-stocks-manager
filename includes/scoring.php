@@ -170,6 +170,11 @@ function wp_stocks_calc_score_jp($stock) {
 
     $fy  = wp_stocks_get_latest_annual_financials($stock->id ?? 0, 2);
     $fy0 = $fy[0] ?? null; // 直近本決算
+    // 配当性向：J-Quantsの値が無い行（TDnet由来など）は、年間配当÷EPSから計算して補う
+    if ($fy0 && !(floatval($fy0->payout_ratio_annual ?? 0) > 0)
+        && floatval($fy0->dividend_annual ?? 0) > 0 && floatval($fy0->eps ?? 0) > 0) {
+        $fy0->payout_ratio_annual = floatval($fy0->dividend_annual) / floatval($fy0->eps) * 100;
+    }
     $fy1 = $fy[1] ?? null; // 前期本決算
 
     $detail      = [];
