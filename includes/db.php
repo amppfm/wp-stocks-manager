@@ -358,6 +358,7 @@ function wp_stocks_manager_create_tables() {
         'manual_roe'                       => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_roe FLOAT DEFAULT NULL AFTER manual_bps",
         'manual_equity_ratio'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_equity_ratio FLOAT DEFAULT NULL AFTER manual_roe",
         'manual_forecast_dividend_annual'  => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_forecast_dividend_annual FLOAT DEFAULT NULL AFTER manual_equity_ratio",
+        'manual_set_disc_date'             => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_set_disc_date DATE DEFAULT NULL AFTER manual_forecast_dividend_annual",
     ];
 
     foreach ($new_cols as $col => $sql) {

@@ -735,6 +735,10 @@ add_action('admin_post_update_manual_forecast_eps', function() {
         $manual_update[$mcol] = ($raw === '' || !is_numeric($raw)) ? null : (float) $raw;
     }
     if ($manual_update) {
+        // 手動保存時点のJ-Quants最新開示日を記録（これより新しい決算が入ったら手動値を自動解除する）
+        $manual_update['manual_set_disc_date'] = $wpdb->get_var($wpdb->prepare(
+            "SELECT jquants_disc_date FROM {$wpdb->prefix}stocks WHERE id = %d", $id
+        ));
         $wpdb->update($wpdb->prefix . 'stocks', $manual_update, ['id' => $id]);
     }
 

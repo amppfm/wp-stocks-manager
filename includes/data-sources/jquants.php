@@ -349,6 +349,49 @@ function wp_stocks_jquants_market_code_to_label($market_code) {
 // 週次cron用：1銘柄分をJ-Quantsから取得しjquants_*列へ保存
 // （manual_*列には一切触れない。手動入力を自動上書きしないための設計）
 // -----------------------------------------------------------
+// --------------------------------------------------
+// 手動入力値の自動解除
+//   手動保存時の開示日（manual_set_disc_date）より新しい開示（決算）が入ったら、
+//   手動入力値を解除するための「更新する列」を返す。解除しない場合は、基準日だけ補う。
+//   基準日が未記録の古い手動値は、同期前のDBの開示日（jquants_disc_date）を基準にする。
+// --------------------------------------------------
+function wp_stocks_jquants_stale_manual_clear($stock_id, $new_disc) {
+    global $wpdb;
+    if (empty($new_disc)) return [];
+
+    $t = $wpdb->prefix . 'stocks';
+    $r = $wpdb->get_row($wpdb->prepare(
+        "SELECT jquants_disc_date, manual_set_disc_date, manual_eps, manual_bps, manual_roe, manual_equity_ratio,
+                manual_forecast_dividend_annual, manual_forecast_eps, manual_next_fy_forecast_eps
+         FROM {$t} WHERE id = %d", $stock_id
+    ));
+    if (!$r) return [];
+
+    $new_cols = ['manual_eps', 'manual_bps', 'manual_roe', 'manual_equity_ratio', 'manual_forecast_dividend_annual'];
+    $old_cols = ['manual_forecast_eps', 'manual_next_fy_forecast_eps']; // 0=未設定
+    $has = false;
+    foreach ($new_cols as $c) { if ($r->$c !== null && $r->$c !== '') $has = true; }
+    foreach ($old_cols as $c) { if ($r->$c !== null && $r->$c !== '' && (float)$r->$c != 0.0) $has = true; }
+    if (!$has) return [];
+
+    $baseline = !empty($r->manual_set_disc_date) ? $r->manual_set_disc_date : $r->jquants_disc_date;
+    if (empty($baseline)) return ['manual_set_disc_date' => $new_disc];
+    if (strcmp((string)$new_disc, (string)$baseline) <= 0) {
+        return empty($r->manual_set_disc_date) ? ['manual_set_disc_date' => $baseline] : [];
+    }
+
+    // 新しい決算を検知：手動値を解除
+    $clear = [];
+    foreach ($new_cols as $c) $clear[$c] = null;
+    foreach ($old_cols as $c) {
+        $col = $wpdb->get_row("SHOW COLUMNS FROM {$t} LIKE '{$c}'");
+        $clear[$c] = ($col && isset($col->Null) && $col->Null === 'YES') ? null : 0;
+    }
+    $clear['manual_set_disc_date'] = null;
+    error_log('[wp-stocks] 新しい決算(' . $new_disc . ')を検知したため、手動入力値を解除しました stock_id=' . $stock_id);
+    return $clear;
+}
+
 function wp_stocks_jquants_sync_stock($stock_id, $code) {
     global $wpdb;
 
@@ -373,6 +416,9 @@ function wp_stocks_jquants_sync_stock($stock_id, $code) {
         $update['jquants_roe']                       = $data['roe'];
         $update['jquants_forecast_dividend_annual']  = $data['forecast_dividend_annual'];
         $update['jquants_disc_date']                 = $data['disc_date'];
+
+        // 新しい決算が入っていたら、手動入力値を解除する（上のDB更新より前に判定）
+        $update = array_merge($update, wp_stocks_jquants_stale_manual_clear($stock_id, $data['disc_date']));
 
         // 四半期データ（1Q/2Q累計/3Q累計/通期）をstock_quarterly_financialsへ保存
         // ※APIコールは上のwp_stocks_jquants_get_fins_records()と共通（追加コールなし）
@@ -409,6 +455,12 @@ function wp_stocks_jquants_sync_stock($stock_id, $code) {
     $update['jquants_updated_at'] = current_time('mysql');
 
     $wpdb->update($wpdb->prefix . 'stocks', $update, ['id' => $stock_id]);
+
+    // 手動値を解除した銘柄は、企業情報を再計算して画面の値（ROE・PBR・配当利回り等）を自動値に戻す
+    if (array_key_exists('manual_bps', $update) && $update['manual_bps'] === null && function_exists('wp_stocks_save_company_info')) {
+        $code_db = $wpdb->get_var($wpdb->prepare("SELECT code FROM {$wpdb->prefix}stocks WHERE id = %d", $stock_id));
+        if ($code_db) wp_stocks_save_company_info($stock_id, $code_db . '.T'); // J-Quantsは日本株のみ
+    }
 
     return true;
 }
