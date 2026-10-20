@@ -75,6 +75,8 @@ function wp_stocks_company_page() {
     // PER（実績）は、画面のEPS（実績）と同じ物差し（現在株価÷実効実績EPS）にそろえる（スコアの「PER業種比」と同じ値）
     // ※米国株、EPSが取れない・赤字の銘柄は、これまでのYahoo/FMP由来のPERのまま
     $stock->per = wp_stocks_get_effective_per($stock);
+    // PER（予想）も、画面のEPS（予想）と同じ物差し（現在株価÷予想EPS）にそろえる（米国株・予想EPSが無い銘柄は保存値のまま）
+    $stock->forward_per = wp_stocks_get_effective_forward_per($stock);
 
     if (isset($_GET['message'])) {
         $m = $_GET['message'];
@@ -83,8 +85,8 @@ function wp_stocks_company_page() {
         if ($m === 'memo_saved') echo '<div class="updated"><p>メモを保存しました。</p></div>';
         if ($m === 'ai_saved')   echo '<div class="updated"><p>AI分析結果を履歴に保存しました。</p></div>';
         if ($m === 'ai_deleted') echo '<div class="updated"><p>AI分析履歴を削除しました。</p></div>';
-        if ($m === 'info_saved') echo '<div class="updated"><p>企業情報を更新しました。</p></div>';
-        if ($m === 'jquants_sync_saved') echo '<div class="updated"><p>J-Quantsから財務スコアカード・株価指標を更新しました。</p></div>';
+        if ($m === 'info_saved') echo '<div class="updated"><p>株価指標・予想EPSを更新しました。</p></div>';
+        if ($m === 'jquants_sync_saved') echo '<div class="updated"><p>財務データ（J-Quants）を更新しました。</p></div>';
         if ($m === 'jquants_sync_error') echo '<div class="error"><p>J-Quantsからの取得に失敗しました。ログを確認してください。</p></div>';
         if ($m === 'info_error') echo '<div class="error"><p>企業情報の取得に失敗しました。</p></div>';
         if ($m === 'news_saved') echo '<div class="updated"><p>適時開示を取得・保存しました。</p></div>';
@@ -711,15 +713,24 @@ function wp_stocks_company_page() {
     }
     echo '</div>';
 
-    // J-Quants財務データの手動更新ボタン（日本株のみ）
-    // ※上の財務スコアカード・株価指標・業績指標は、jquants_eps/jquants_roe等のJ-Quants由来列を
-    //   使っている項目があるが、これらは従来「週次Cron」でしか更新されず、個別銘柄で単発更新する
-    //   手段が無かった。「Yahoo!ファイナンスから企業情報を再取得」ボタンはYahoo側の値しか更新しない。
+    // データ更新ボタン（基本情報タブに2つ並べる）
+    //   左：J-Quants → 財務データ（jquants_系の列、四半期財務、業種・市場区分）。日本株のみ。
+    //   右：Yahoo等 → 株価指標・予想EPS・PER・PEG（画面の「EPS（予想）」「PER（予想）」などの元）。
+    //   両方更新するときは、左→右の順（J-Quantsを先に最新にしてから、予想EPS等を決め直す）。
+    $info_btn_url = wp_nonce_url(admin_url('admin-post.php?action=update_company_info&id=' . $id . '&from=wp-stocks-company'), 'wp_stocks_action_' . $id);
+    echo '<div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;">';
     if (!$is_usd) {
         $jq_sync_url = wp_nonce_url(admin_url('admin-post.php?action=wp_stocks_jquants_sync_stock&id=' . $id), 'wp_stocks_jquants_sync_' . $id);
-        echo '<p style="margin-top:10px;"><a href="' . esc_url($jq_sync_url) . '" class="button">&#x1F504; J-Quantsから財務スコアカード・株価指標を更新</a></p>';
-        echo '<p class="description">EPS・ROE・自己資本比率・業種等のJ-Quants由来データを最新化します（通常は週次Cronで自動更新されますが、ここから単独で即時実行できます）。</p>';
+        echo '<div style="max-width:360px;">';
+        echo '<a href="' . esc_url($jq_sync_url) . '" class="button">&#x1F504; &#x2460; 財務データを更新（J-Quants）</a>';
+        echo '<p class="description" style="margin:4px 0 0;">実績EPS・ROE・自己資本比率・四半期財務（財務タブ）・業種を最新にします。決算がJ-Quantsに載る約12週間後や、財務の数字が古いときに。</p>';
+        echo '</div>';
     }
+    echo '<div style="max-width:360px;">';
+    echo '<a href="' . esc_url($info_btn_url) . '" class="button">&#x1F504; ' . ($is_usd ? '' : '&#x2461; ') . '株価指標・予想EPSを更新' . ($is_usd ? '（Yahoo・FMP）' : '（Yahoo等）') . '</a>';
+    echo '<p class="description" style="margin:4px 0 0;">PER・PBR・予想EPS・PEGなど、画面の株価指標を更新します。決算が出たあとや、予想の数字が古いときに。' . ($is_usd ? '' : '両方更新するときは&#x2460;→&#x2461;の順に。') . '</p>';
+    echo '</div>';
+    echo '</div>';
 
     echo '</div>'; // tab-info
     } // end info tab
@@ -1594,7 +1605,7 @@ function wp_stocks_company_page() {
 
     // 企業情報再取得ボタン
     $info_url = wp_nonce_url(admin_url('admin-post.php?action=update_company_info&id=' . $id . '&from=wp-stocks-company'), 'wp_stocks_action_' . $id);
-    echo '<p><a href="' . esc_url($info_url) . '" class="button">&#x1F504; Yahoo!ファイナンスから企業情報を再取得</a></p>';
+    echo '<p><a href="' . esc_url($info_url) . '" class="button">&#x1F504; 株価指標・予想EPSを更新（Yahoo等）</a></p>';
 
 
     // 外部チャートリンク
@@ -2576,7 +2587,7 @@ function wp_stocks_company_page() {
     }
     // 企業情報再取得
     $info_url = wp_nonce_url(admin_url('admin-post.php?action=update_company_info&id=' . $id . '&from=wp-stocks-company'), 'wp_stocks_action_' . $id);
-    echo '<p style="margin-top:25px;"><a href="' . esc_url($info_url) . '" class="button">&#x1F504; Yahoo!ファイナンスから企業情報を再取得</a></p>';
+    echo '<p style="margin-top:25px;"><a href="' . esc_url($info_url) . '" class="button">&#x1F504; 株価指標・予想EPSを更新（Yahoo等）</a></p>';
     echo '</div>'; // tab-edit
     } // end edit tab
     echo '</div>'; // tabs wrapper
