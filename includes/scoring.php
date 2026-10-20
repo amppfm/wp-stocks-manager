@@ -80,6 +80,31 @@ function wp_stocks_get_effective_per($stock) {
 }
 
 // --------------------------------------------------
+// PER（予想）= 現在株価 ÷ 予想EPS（forward_eps）。画面の「EPS（予想）」と同じ物差しにそろえる
+//   stocks.forward_per はYahoo由来の保存値で、予想EPS（手動＞TDnet＞J-Quants＞来期予想＞Yahoo）と元の数字が違うことがあるため、
+//   日本株は表示時に株価÷forward_epsで計算する。
+//   米国株、株価・予想EPSが取れない銘柄は、stocks.forward_per（保存値）のまま返す。
+// --------------------------------------------------
+function wp_stocks_get_effective_forward_per($stock) {
+    global $wpdb;
+    $stock_fper = floatval($stock->forward_per ?? 0);
+    if (($stock->currency ?? 'JPY') === 'USD') return $stock_fper;
+    $sid = (int) ($stock->id ?? 0);
+    if ($sid <= 0) return $stock_fper;
+    $feps = floatval($stock->forward_eps ?? 0);
+    if ($feps <= 0) return $stock_fper;
+    static $price_cache_fwd = [];
+    if (!array_key_exists($sid, $price_cache_fwd)) {
+        $price_cache_fwd[$sid] = floatval($wpdb->get_var($wpdb->prepare(
+            "SELECT price FROM {$wpdb->prefix}stock_prices WHERE stock_id = %d ORDER BY datetime DESC LIMIT 1", $sid
+        )));
+    }
+    $price = $price_cache_fwd[$sid];
+    if ($price <= 0) return $stock_fper;
+    return $price / $feps;
+}
+
+// --------------------------------------------------
 // 適正株価計算: EPS × セクター平均PER（自社PERは使わないため循環参照なし）
 // 戻り値: ['actual' => 実績ベース適正株価 or null, 'forward' => 予想ベース適正株価 or null,
 //          'sector_avg_per' => 実績ベースの基準PER or null, 'sector_avg_per_forward' => 予想ベースの基準PER or null]
