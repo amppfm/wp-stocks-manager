@@ -75,6 +75,8 @@ function wp_stocks_sector_page($skip_wrap = false, $custom_base_url = null) {
         $sector_key = wp_stocks_get_effective_sector($s);
         if ($sector_key === '') $sector_key = 'その他';
         $sector_ja  = wp_stocks_sector_ja($sector_key);
+        // PER（実績）は銘柄ページ・スコアと同じ「株価÷実効実績EPS」にそろえる（セクター平均PERにも反映される）
+        $s->per     = wp_stocks_get_effective_per($s);
         $score_data = wp_stocks_calc_score($s);
         $tech       = $tech_map[$s->id] ?? null;
 

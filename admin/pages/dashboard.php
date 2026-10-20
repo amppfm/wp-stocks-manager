@@ -55,6 +55,8 @@ function wp_stocks_dashboard_page() {
     $nearest_earnings = null; $nearest_stock = null;
 
     foreach ($all_stocks as $s) {
+        // PER（実績）は銘柄ページ・スコアと同じ「株価÷実効実績EPS」にそろえる（並べ替えにも反映される）
+        $s->per       = wp_stocks_get_effective_per($s);
         $score_data   = wp_stocks_calc_score($s);
         $s->_score    = $score_data['score'];
         $s->_judgment = $score_data['judgment'];
