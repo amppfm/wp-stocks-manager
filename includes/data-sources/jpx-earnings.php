@@ -3,6 +3,8 @@
 //   - J-Quants無料プランでは先の予定日が取れないため、東証が公開している一覧で補う
 //   - Excelは月ごとのファイル（xlsx）。ZipArchiveが無い環境でも読めるよう、zipは自前で展開する
 //   - 更新するのは「未取得」か「日付が過ぎた」銘柄だけ（これから先の日付・手入力は上書きしない）
+//   - 先の予定日が一覧に無くても、発表済みの日付が一覧にあれば、前回決算として登録する（「未取得」のままにしない）。
+//     次の予定日が一覧に載れば、翌日の取り込みで自動的にそちらへ置き換わる
 //   - 毎日 6:00（日本時間）に実行。J-Quantsの同期（6:10）より先に走らせ、J-Quantsの問い合わせを減らす
 if (!defined('ABSPATH')) exit;
 
@@ -146,7 +148,7 @@ function wp_stocks_jpx_xlsx_urls(&$err) {
 function wp_stocks_jpx_sync_earnings_dates() {
     global $wpdb;
     @set_time_limit(180);
-    $st = ['at' => current_time('mysql'), 'files' => 0, 'updated' => 0, 'missing' => 0, 'error' => ''];
+    $st = ['at' => current_time('mysql'), 'files' => 0, 'updated' => 0, 'past' => 0, 'missing' => 0, 'error' => ''];
 
     $err  = '';
     $urls = wp_stocks_jpx_xlsx_urls($err);
@@ -154,6 +156,7 @@ function wp_stocks_jpx_sync_earnings_dates() {
 
     $today = wp_stocks_jh_today_safe();
     $map   = [];   // コード => 今日以降で一番近い予定日
+    $past  = [];   // コード => 今日より前で一番新しい発表日（前回決算）
     $first_err = $err;
     foreach ($urls as $u) {
         list($bin, $e) = wp_stocks_jpx_http_get($u);
@@ -163,7 +166,10 @@ function wp_stocks_jpx_sync_earnings_dates() {
         $st['files']++;
         foreach (wp_stocks_jpx_parse_rows($rows) as $code => $dates) {
             foreach ($dates as $d) {
-                if ($d < $today) continue;
+                if ($d < $today) {
+                    if (!isset($past[$code]) || $d > $past[$code]) $past[$code] = $d;
+                    continue;
+                }
                 if (!isset($map[$code]) || $d < $map[$code]) $map[$code] = $d;
             }
         }
@@ -173,15 +179,26 @@ function wp_stocks_jpx_sync_earnings_dates() {
         $st['error'] = $first_err !== '' ? $first_err : '取得できたファイルがありません';
     } else {
         $stocks = $wpdb->get_results($wpdb->prepare(
-            "SELECT id, code, currency FROM {$wpdb->prefix}stocks
+            "SELECT id, code, currency, earnings_date FROM {$wpdb->prefix}stocks
              WHERE status IN ('watch','portfolio') AND is_sector_etf = 0
                AND (earnings_date IS NULL OR earnings_date < %s)", $today));
         foreach ((array) $stocks as $s) {
             if (($s->currency ?? 'JPY') === 'USD') continue;
             $code = strtoupper(preg_replace('/\.T$/i', '', trim((string) $s->code)));
-            if (!isset($map[$code])) { $st['missing']++; continue; }
-            $wpdb->update($wpdb->prefix . 'stocks', ['earnings_date' => $map[$code]], ['id' => $s->id]);
-            $st['updated']++;
+            if (isset($map[$code])) {
+                $wpdb->update($wpdb->prefix . 'stocks', ['earnings_date' => $map[$code]], ['id' => $s->id]);
+                $st['updated']++;
+                continue;
+            }
+            // 先の予定日が一覧に無い銘柄：発表済みの日付が一覧にあれば、前回決算として登録する
+            if (isset($past[$code])) {
+                if ($s->earnings_date === null || $s->earnings_date < $past[$code]) {
+                    $wpdb->update($wpdb->prefix . 'stocks', ['earnings_date' => $past[$code]], ['id' => $s->id]);
+                    $st['past']++;
+                }
+                continue;   // 登録済みの前回決算が一覧と同じか新しいなら、そのまま
+            }
+            $st['missing']++;
         }
         if ($first_err !== '') $st['error'] = $first_err;   // 一部のファイルだけ失敗した場合も記録する
     }
@@ -189,7 +206,7 @@ function wp_stocks_jpx_sync_earnings_dates() {
     update_option('wp_stocks_jpx_earnings_status', $st, false);
     if (function_exists('wp_stocks_log')) {
         if ($st['error'] !== '') wp_stocks_log('error', 'jpx_earnings_date', 'JP', $st['error']);
-        else wp_stocks_log('info', 'jpx_earnings_date', 'JP', "JPXから決算予定日を更新：{$st['updated']}件（一覧に予定なし{$st['missing']}件）");
+        else wp_stocks_log('info', 'jpx_earnings_date', 'JP', "JPXから決算予定日を更新：{$st['updated']}件、前回決算として登録{$st['past']}件（一覧に載っていない{$st['missing']}件）");
     }
     return $st;
 }

@@ -100,7 +100,7 @@ function wp_stocks_calendar_page() {
         if ($jr['error'] !== '') {
             echo '<div class="notice notice-error"><p>JPXからの取得に失敗しました：' . esc_html($jr['error']) . '</p></div>';
         } else {
-            echo '<div class="notice notice-success"><p>JPXから決算予定日を取得しました。ファイル ' . intval($jr['files']) . '個／更新 ' . intval($jr['updated']) . '件／一覧に予定なし ' . intval($jr['missing']) . '件。</p></div>';
+            echo '<div class="notice notice-success"><p>JPXから決算予定日を取得しました。ファイル ' . intval($jr['files']) . '個／更新 ' . intval($jr['updated']) . '件／前回決算として登録 ' . intval($jr['past'] ?? 0) . '件／一覧に載っていない ' . intval($jr['missing']) . '件。</p></div>';
         }
     }
     echo '<div class="wrap"><h1>📅 決算カレンダー</h1>';
