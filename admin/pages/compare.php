@@ -84,6 +84,14 @@ function wp_stocks_compare_page() {
     if (empty($stocks)) { echo '<p>銘柄データが見つかりません。</p></div>'; return; }
 
     // 比較テーブル
+    // 通期（TDnet／J-Quants）の前期比・利益率。銘柄ページの業績指標と同じ wp_stocks_get_annual_growth() を使う
+    $annual_growth = [];
+    foreach ($stocks as $sid => $s_ag) $annual_growth[$sid] = wp_stocks_get_annual_growth($s_ag);
+    $fmt_pct = function($v, $signed = false) {
+        if ($v === null) return '-';
+        return ($signed && $v >= 0 ? '+' : '') . number_format($v, 1) . '%';
+    };
+
     $rows = [
         ['セクター',     fn($s) => wp_stocks_sector_ja(wp_stocks_get_effective_sector($s) ?: '-')],
         ['現在株価',     fn($s) => ($prices[$s->id] ?? null) ? number_format($prices[$s->id]->price) . '円' : '-'],
@@ -101,9 +109,12 @@ function wp_stocks_compare_page() {
         ['自己資本比率', fn($s) => ($s->equity_ratio ?? 0) > 0 ? number_format($s->equity_ratio, 1) . '%' : '-'],
         ['EPS（実績）',  fn($s) => (function($eps) { return $eps != 0 ? number_format($eps, 1) . '円' : '-'; })(floatval(wp_stocks_get_effective_eps_actual($s)['value'] ?? 0))],
         ['EPS（予想）',  fn($s) => ($s->forward_eps ?? 0) != 0 ? number_format($s->forward_eps, 1) . '円' : '-'],
-        ['売上成長率',   fn($s) => ($s->revenue_growth ?? 0) != 0 ? ($s->revenue_growth >= 0 ? '+' : '') . number_format($s->revenue_growth, 1) . '%' : '-'],
-        ['利益成長率',   fn($s) => ($s->earnings_growth ?? 0) != 0 ? ($s->earnings_growth >= 0 ? '+' : '') . number_format($s->earnings_growth, 1) . '%' : '-'],
-        ['利益率',       fn($s) => ($s->profit_margin ?? 0) != 0 ? number_format($s->profit_margin, 1) . '%' : '-'],
+        ['売上成長率（通期）',           fn($s) => $fmt_pct($annual_growth[$s->id]['revenue'] ?? null, true)],
+        ['売上成長率（直近四半期・Yahoo）', fn($s) => ($s->revenue_growth ?? 0) != 0 ? ($s->revenue_growth >= 0 ? '+' : '') . number_format($s->revenue_growth, 1) . '%' : '-'],
+        ['利益成長率（通期・純利益）',     fn($s) => $fmt_pct($annual_growth[$s->id]['net_income'] ?? null, true)],
+        ['利益成長率（直近四半期・Yahoo）', fn($s) => ($s->earnings_growth ?? 0) != 0 ? ($s->earnings_growth >= 0 ? '+' : '') . number_format($s->earnings_growth, 1) . '%' : '-'],
+        ['利益率（通期）',               fn($s) => $fmt_pct($annual_growth[$s->id]['profit_margin'] ?? null)],
+        ['利益率（Yahoo）',              fn($s) => ($s->profit_margin ?? 0) != 0 ? number_format($s->profit_margin, 1) . '%' : '-'],
         ['時価総額',     fn($s) => ($s->market_cap ?? 0) > 0 ? number_format(intval($s->market_cap) / 100000000) . '億円' : '-'],
         ['決算予定日',   fn($s) => !empty($s->earnings_date) ? $s->earnings_date : '-'],
     ];
