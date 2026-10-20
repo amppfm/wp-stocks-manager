@@ -77,6 +77,9 @@ function wp_stocks_company_page() {
     $stock->per = wp_stocks_get_effective_per($stock);
     // PER（予想）も、画面のEPS（予想）と同じ物差し（現在株価÷予想EPS）にそろえる（米国株・予想EPSが無い銘柄は保存値のまま）
     $stock->forward_per = wp_stocks_get_effective_forward_per($stock);
+    // PEGも画面のPER・EPS・利益成長率から計算する（日本株のみ。減益予想・通期の成長率が負の銘柄はN/A）
+    $stock->peg          = wp_stocks_get_effective_peg($stock);
+    $stock->peg_trailing = wp_stocks_get_effective_peg_trailing($stock);
 
     if (isset($_GET['message'])) {
         $m = $_GET['message'];
@@ -663,8 +666,8 @@ function wp_stocks_company_page() {
         ['EPS（予想）', ($stock->forward_eps ?? 0) != 0 ? number_format($stock->forward_eps, 1) . '円' : 'N/A', '#555', $eps_fc_tip],
         ['ROE',         ($stock->roe ?? 0) != 0 ? number_format($stock->roe, 1) . '%' : 'N/A', $roe_color, 'ROE>=15%が優良'],
         ['ROA',         ($stock->roa ?? 0) != 0 ? number_format($stock->roa, 1) . '%' : 'N/A', '#555', '総資産利益率'],
-        ['PEG',         ($stock->peg ?? 0) > 0 ? number_format($stock->peg, 2) : 'N/A', $peg_color, 'PEG<1で割安成長（Yahoo・予想ベース寄り）'],
-        ['PEGトレーリング', ($stock->peg_trailing ?? 0) > 0 ? number_format($stock->peg_trailing, 2) : 'N/A', '#555', '実績PER÷実績利益成長率'],
+        ['PEG',         ($stock->peg ?? 0) > 0 ? number_format($stock->peg, 2) : 'N/A', $peg_color, ($is_usd ? 'PEG<1で割安成長（Yahoo・予想ベース寄り）' : '予想PER÷予想EPS成長率。PEG<1で割安成長（減益予想はN/A）')],
+        ['PEGトレーリング', ($stock->peg_trailing ?? 0) > 0 ? number_format($stock->peg_trailing, 2) : 'N/A', '#555', ($is_usd ? '実績PER÷実績利益成長率' : '実績PER÷通期純利益の前期比成長率（減益はN/A）')],
         ['配当利回り',  ($stock->dividend_yield ?? 0) > 0 ? number_format($stock->dividend_yield, 2) . '%' : 'N/A', '#27ae60', '年間配当÷株価'],
         ['自己資本比率',($stock->equity_ratio ?? 0) > 0 ? number_format($stock->equity_ratio, 1) . '%' : 'N/A', $eq_color, '>=50%が安全の目安'],
     ];

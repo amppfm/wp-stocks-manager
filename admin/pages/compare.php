@@ -76,6 +76,8 @@ function wp_stocks_compare_page() {
             // PER（実績）は銘柄ページ・スコアと同じ「株価÷実効実績EPS」にそろえる
             $s->per = wp_stocks_get_effective_per($s);
             $s->forward_per = wp_stocks_get_effective_forward_per($s);
+            $s->peg          = wp_stocks_get_effective_peg($s);
+            $s->peg_trailing = wp_stocks_get_effective_peg_trailing($s);
             $stocks[$sid] = $s;
             $techs[$sid]  = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}stock_technicals WHERE stock_id = %d", $sid));
             $prices[$sid] = $wpdb->get_row($wpdb->prepare("SELECT price, previous_close FROM {$wpdb->prefix}stock_prices WHERE stock_id = %d ORDER BY datetime DESC LIMIT 1", $sid));

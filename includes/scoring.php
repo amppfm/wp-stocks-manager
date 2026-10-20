@@ -105,6 +105,45 @@ function wp_stocks_get_effective_forward_per($stock) {
 }
 
 // --------------------------------------------------
+// PEG（予想）= PER（予想）÷ 予想EPS成長率（%）。画面の「PER（予想）」「EPS（予想）」「EPS（実績）」と同じ物差しにそろえる
+//   予想EPS成長率 = (予想EPS ÷ 実効実績EPS − 1) × 100（スコアの「会社予想の増益率」と同じ）。
+//   減益・横ばい予想（成長率が0以下）はPEGとして意味を持たないため0（N/A扱い）を返す。
+//   米国株、予想EPS・実績EPS・株価のいずれかが取れない銘柄は、stocks.peg（保存値）のまま返す。
+// --------------------------------------------------
+function wp_stocks_get_effective_peg($stock) {
+    $stored = floatval($stock->peg ?? 0);
+    if (($stock->currency ?? 'JPY') === 'USD') return $stored;
+    $feps   = floatval($stock->forward_eps ?? 0);
+    $eps    = floatval(wp_stocks_get_effective_eps_actual($stock)['value'] ?? 0);
+    $fper   = wp_stocks_get_effective_forward_per($stock);
+    if ($feps <= 0 || $eps <= 0 || $fper <= 0) return $stored;
+    $growth = ($feps / $eps - 1) * 100;
+    if ($growth <= 0) return 0;
+    return $fper / $growth;
+}
+
+// --------------------------------------------------
+// PEG（実績）= PER（実績）÷ 通期の純利益成長率（%、前期比）。画面の「PER（実績）」「利益成長率（通期・純利益）」と同じ物差し
+//   通期の成長率は wp_stocks_get_annual_growth()（TDnet／J-Quantsの本決算の行）。成長率が0以下なら0（N/A扱い）。
+//   米国株、通期の成長率が取れない銘柄は、stocks.peg_trailing（保存値）のまま返す。
+// --------------------------------------------------
+function wp_stocks_get_effective_peg_trailing($stock) {
+    $stored = floatval($stock->peg_trailing ?? 0);
+    if (($stock->currency ?? 'JPY') === 'USD') return $stored;
+    $sid = (int) ($stock->id ?? 0);
+    if ($sid <= 0) return $stored;
+    static $growth_cache = [];
+    if (!array_key_exists($sid, $growth_cache)) {
+        $growth_cache[$sid] = wp_stocks_get_annual_growth($stock)['net_income'] ?? null;
+    }
+    $growth = $growth_cache[$sid];
+    $per    = wp_stocks_get_effective_per($stock);
+    if ($growth === null || $per <= 0) return $stored;
+    if ($growth <= 0) return 0;
+    return $per / $growth;
+}
+
+// --------------------------------------------------
 // 適正株価計算: EPS × セクター平均PER（自社PERは使わないため循環参照なし）
 // 戻り値: ['actual' => 実績ベース適正株価 or null, 'forward' => 予想ベース適正株価 or null,
 //          'sector_avg_per' => 実績ベースの基準PER or null, 'sector_avg_per_forward' => 予想ベースの基準PER or null]

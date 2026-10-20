@@ -57,6 +57,10 @@ function wp_stocks_dashboard_page() {
     foreach ($all_stocks as $s) {
         // PER（実績）は銘柄ページ・スコアと同じ「株価÷実効実績EPS」にそろえる（並べ替えにも反映される）
         $s->per       = wp_stocks_get_effective_per($s);
+        // PEGも画面のPER・EPS・利益成長率から計算する（日本株のみ。並べ替えにも反映される）
+        $s->forward_per   = wp_stocks_get_effective_forward_per($s);
+        $s->peg           = wp_stocks_get_effective_peg($s);
+        $s->peg_trailing  = wp_stocks_get_effective_peg_trailing($s);
         $score_data   = wp_stocks_calc_score($s);
         $s->_score    = $score_data['score'];
         $s->_judgment = $score_data['judgment'];
