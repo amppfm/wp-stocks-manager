@@ -99,7 +99,7 @@ function wp_stocks_compare_page() {
         ['PEG(実績)',    fn($s) => ($s->peg_trailing ?? 0) > 0 ? number_format($s->peg_trailing, 2) : '-'],
         ['配当利回り',   fn($s) => ($s->dividend_yield ?? 0) > 0 ? number_format($s->dividend_yield, 2) . '%' : '-'],
         ['自己資本比率', fn($s) => ($s->equity_ratio ?? 0) > 0 ? number_format($s->equity_ratio, 1) . '%' : '-'],
-        ['EPS（実績）',  fn($s) => ($s->eps ?? 0) != 0 ? number_format($s->eps, 1) . '円' : '-'],
+        ['EPS（実績）',  fn($s) => (function($eps) { return $eps != 0 ? number_format($eps, 1) . '円' : '-'; })(floatval(wp_stocks_get_effective_eps_actual($s)['value'] ?? 0))],
         ['EPS（予想）',  fn($s) => ($s->forward_eps ?? 0) != 0 ? number_format($s->forward_eps, 1) . '円' : '-'],
         ['売上成長率',   fn($s) => ($s->revenue_growth ?? 0) != 0 ? ($s->revenue_growth >= 0 ? '+' : '') . number_format($s->revenue_growth, 1) . '%' : '-'],
         ['利益成長率',   fn($s) => ($s->earnings_growth ?? 0) != 0 ? ($s->earnings_growth >= 0 ? '+' : '') . number_format($s->earnings_growth, 1) . '%' : '-'],
