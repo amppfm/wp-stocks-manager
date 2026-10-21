@@ -245,9 +245,22 @@ add_action('wp_stocks_company_cron', function() {
     $edgar_ok = $edgar_ng = 0;
     $jquants_ok = $jquants_ng = 0;
 
+    // 途中で止まったとき（致命的エラー・メモリ不足・強制終了など）に、最後に処理していた銘柄と原因をログに残す。
+    // 正常に最後まで走ったときは $cron_done = true にして、何も書かない。
+    $cron_last = '';
+    $cron_done = false;
+    register_shutdown_function(function() use (&$cron_last, &$cron_done) {
+        if ($cron_done) return;
+        $err = error_get_last();
+        $why = $err ? ($err['message'] . '（' . basename($err['file']) . ':' . $err['line'] . '）') : 'エラーの記録なし（タイムアウトなどの強制終了の可能性）';
+        wp_stocks_log('error', 'company_cron', $cron_last, '企業情報週次更新が途中で止まりました：' . $why);
+    });
+
     foreach ($stocks as $s) {
+        $cron_last = $s->code;
         $is_usd = ($s->currency ?? 'JPY') === 'USD';
         $sym = $is_usd ? $s->code : $s->code . '.T';
+      try {
 
         // 日本株は、先にJ-Quants同期（jquants_系の列・四半期財務・決算後の手動入力の解除）を済ませ、
         // そのあとで企業情報（予想EPS・PER・PEGなど）を更新する。
@@ -267,12 +280,18 @@ add_action('wp_stocks_company_cron', function() {
             $edgar_result = wp_stocks_fetch_quarterly_financials_edgar($s->id, $s->code);
             if ($edgar_result) $edgar_ok++; else $edgar_ng++;
         }
+      } catch (\Throwable $e) {
+        // 1銘柄の例外で全体を止めない（失敗として数え、原因をログに残して次の銘柄へ）
+        $ng++;
+        wp_stocks_log('error', 'company_cron', $s->code, '例外：' . $e->getMessage() . '（' . basename($e->getFile()) . ':' . $e->getLine() . '）');
+      }
 
         // 負荷対策：3件ごとに5秒sleep、それ以外は2秒
         if (($ok + $ng) % 3 === 0) sleep(5);
         else sleep(2);
     }
 
+    $cron_done = true;
     $msg = sprintf(
         '企業情報週次更新完了：成功%d件 / 失敗%d件（うち米国株EDGAR財務：成功%d件 / 失敗%d件、日本株J-Quants：成功%d件 / 失敗%d件）',
         $ok, $ng, $edgar_ok, $edgar_ng, $jquants_ok, $jquants_ng
