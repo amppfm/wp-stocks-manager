@@ -248,6 +248,17 @@ add_action('wp_stocks_company_cron', function() {
     foreach ($stocks as $s) {
         $is_usd = ($s->currency ?? 'JPY') === 'USD';
         $sym = $is_usd ? $s->code : $s->code . '.T';
+
+        // 日本株は、先にJ-Quants同期（jquants_系の列・四半期財務・決算後の手動入力の解除）を済ませ、
+        // そのあとで企業情報（予想EPS・PER・PEGなど）を更新する。
+        // 逆順だと、決算後に解除されるはずの古い手動予想EPSで、その週の予想EPSが決まってしまう。
+        // ★2026-09-26修正：sector列は他の処理で書き換わり得て不安定なため、
+        // TOPIX-17指数連動ETFの判定はwp_stocks_get_topix17_sector_map()の固定コード一覧を使う。
+        if (!$is_usd && !array_key_exists($s->code, wp_stocks_get_topix17_sector_map())) {
+            $jquants_result = wp_stocks_jquants_sync_stock($s->id, $s->code);
+            if ($jquants_result) $jquants_ok++; else $jquants_ng++;
+        }
+
         $result = wp_stocks_save_company_info($s->id, $sym);
         if ($result) $ok++; else $ng++;
 
@@ -255,14 +266,6 @@ add_action('wp_stocks_company_cron', function() {
         if ($is_usd) {
             $edgar_result = wp_stocks_fetch_quarterly_financials_edgar($s->id, $s->code);
             if ($edgar_result) $edgar_ok++; else $edgar_ng++;
-        } else {
-            // 日本株はついでにJ-Quantsの予想EPS等も週次で取得する
-            // ★2026-09-26修正：sector列は他の処理で書き換わり得て不安定なため、
-            // TOPIX-17指数連動ETFの判定はwp_stocks_get_topix17_sector_map()の固定コード一覧を使う。
-            if (!array_key_exists($s->code, wp_stocks_get_topix17_sector_map())) {
-                $jquants_result = wp_stocks_jquants_sync_stock($s->id, $s->code);
-                if ($jquants_result) $jquants_ok++; else $jquants_ng++;
-            }
         }
 
         // 負荷対策：3件ごとに5秒sleep、それ以外は2秒
