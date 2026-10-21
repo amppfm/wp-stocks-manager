@@ -220,10 +220,17 @@ function wp_stocks_jh_record_valuation($stock, $date = null) {
         if ((float)($ea['value'] ?? 0) > 0) $actual = (float)$ea['value'];
     }
 
-    if (($stock->currency ?? 'JPY') === 'USD')                    $src = 'yahoo';
-    elseif ((float)($stock->manual_forecast_eps ?? 0) > 0)       $src = 'manual';
-    elseif ((float)($stock->jquants_forecast_eps ?? 0) > 0)      $src = 'jquants';
-    else                                                          $src = 'other';
+    // 予想EPSの出所：画面の予想EPS（forward_eps）が、どの元の値と一致するかで決める。
+    //   順番は forward_eps の決め方（手入力 → 決算短信（TDnet）→ J-Quants当期 → J-Quants来期 → Yahoo）と同じ。
+    //   値が1つも一致しないときは 'other'（不明）。米国株は 'yahoo'。
+    $same = function ($b) use ($feps) { $b = (float)$b; return $b > 0 && abs($feps - $b) <= max(0.02, $b * 0.0005); };
+    $tde_fc = (function_exists('wp_stocks_tde_forecast_eps') && ($stock->currency ?? 'JPY') !== 'USD') ? wp_stocks_tde_forecast_eps($stock->id) : null;
+    if (($stock->currency ?? 'JPY') === 'USD')                                                   $src = 'yahoo';
+    elseif ($same($stock->manual_forecast_eps ?? 0) || $same($stock->manual_next_fy_forecast_eps ?? 0)) $src = 'manual';
+    elseif ($tde_fc && $same($tde_fc['eps']))                                                    $src = 'tdnet';
+    elseif ($same($stock->jquants_forecast_eps ?? 0))                                            $src = 'jquants';
+    elseif ($same($stock->jquants_next_fy_forecast_eps ?? 0))                                    $src = 'jquants_next';
+    else                                                                                          $src = 'yahoo';
 
     $row = [
         'price'          => $price,
@@ -567,9 +574,18 @@ function wp_stocks_jh_render_tab($stock) {
 
     // 判定の材料（生の値）
     echo '<h4 style="margin:18px 0 6px;">判定の材料（生の値）</h4>';
+    // 予想EPSの出所（その日の評価の記録 stock_valuation_history.eps_source）
+    $eps_src_map = [];
+    $vh_t = $GLOBALS['wpdb']->prefix . 'stock_valuation_history';
+    if ($GLOBALS['wpdb']->get_var($GLOBALS['wpdb']->prepare('SHOW TABLES LIKE %s', $vh_t)) === $vh_t) {
+        foreach ((array)$GLOBALS['wpdb']->get_results($GLOBALS['wpdb']->prepare("SELECT record_date, eps_source FROM {$vh_t} WHERE stock_id = %d ORDER BY record_date DESC LIMIT 400", $id)) as $vr) {
+            $eps_src_map[$vr->record_date] = $vr->eps_source;
+        }
+    }
+    $eps_src_label = ['manual' => '手入力', 'tdnet' => '決算短信（TDnet）', 'jquants' => 'J-Quants（当期）', 'jquants_next' => 'J-Quants（来期）', 'yahoo' => 'Yahoo', 'other' => '不明'];
     echo '<div style="overflow-x:auto;"><table class="widefat striped" style="font-size:12px;min-width:860px;"><thead><tr>'
         . '<th>日付</th><th style="text-align:right;">純利益のコンセンサス比</th><th style="text-align:right;">営業利益のコンセンサス比</th><th title="コンセンサス比の元になった決算の発表日">サプライズの決算日</th>'
-        . '<th style="text-align:right;">予想EPS 30日</th><th style="text-align:right;">予想EPS 90日</th><th style="text-align:right;">決算まで</th>'
+        . '<th style="text-align:right;">予想EPS 30日</th><th style="text-align:right;">予想EPS 90日</th><th title="その日に記録した予想EPSの元。出所が変わった日をまたぐ修正率は、見かけだけの変化の可能性があります">予想EPSの出所</th><th style="text-align:right;">決算まで</th>'
         . '<th style="text-align:right;">52週の位置</th><th style="text-align:right;">高値から</th><th style="text-align:right;">OBV 20日</th><th style="text-align:right;">MFI</th><th style="text-align:right;">出来高比</th><th style="text-align:right;">ATR%</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         echo '<tr><td>' . esc_html($r->judgment_date) . '</td>'
@@ -578,6 +594,7 @@ function wp_stocks_jh_render_tab($stock) {
             . '<td>' . (!empty($r->sur_date) ? esc_html($r->sur_date) : '<span style="color:#ccc;">-</span>') . '</td>'
             . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->eps_rev_30d ?? null, 1, true) . '</td>'
             . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->eps_rev_90d ?? null, 1, true) . '</td>'
+            . '<td>' . (isset($eps_src_map[$r->judgment_date]) && $eps_src_map[$r->judgment_date] !== null && $eps_src_map[$r->judgment_date] !== '' ? esc_html($eps_src_label[$eps_src_map[$r->judgment_date]] ?? $eps_src_map[$r->judgment_date]) : '<span style="color:#ccc;">-</span>') . '</td>'
             . '<td style="text-align:right;">' . (($r->days_to_earn ?? null) !== null ? esc_html($r->days_to_earn) . '日' : '<span style="color:#ccc;">-</span>') . '</td>'
             . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->pos_52w ?? null, 0) . '</td>'
             . '<td style="text-align:right;">' . wp_stocks_jh_fmt($r->dist_high_pct ?? null, 1, true) . '</td>'
