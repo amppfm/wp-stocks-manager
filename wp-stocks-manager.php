@@ -441,6 +441,27 @@ function wp_stocks_get_company_info($symbol) {
             wp_stocks_log('error', 'jquants_ratios', $symbol, 'J-Quantsからの財務指標取得に失敗、Yahoo由来の値にフォールバック');
         }
 
+        // 配当利回り：会社予想の年間配当÷現在株価×100（Yahooの値は、予想配当が取れないときのフォールバック）
+        //   予想配当は J-Quants(FDivAnn) を基本に、決算短信(TDnet)のほうが新しい開示ならそちらを使う。
+        //   手動の予想年間配当は、この後の wp_stocks_manual_overrides_for() で最優先に上書きされる。
+        $div_fc = null;
+        if ($jquants !== false && isset($jquants['forecast_dividend_annual']) && (float)$jquants['forecast_dividend_annual'] > 0) {
+            $div_fc = (float)$jquants['forecast_dividend_annual'];
+        }
+        $div_sid = (int)$wpdb->get_var($wpdb->prepare("SELECT id FROM {$wpdb->prefix}stocks WHERE code = %s", $jquants_code));
+        if ($div_sid && function_exists('wp_stocks_tde_forecast_dividend') && ($tdv = wp_stocks_tde_forecast_dividend($div_sid))) {
+            $jq_disc_raw = ($jquants !== false) ? ($jquants['forecast_dividend_disc_date'] ?? ($jquants['disc_date'] ?? '')) : '';
+            $jq_disc = $jq_disc_raw ? substr((string)$jq_disc_raw, 0, 10) : '';
+            if ($div_fc === null || ($jq_disc !== '' && substr((string)$tdv['disc_at'], 0, 10) > $jq_disc)) {
+                $div_fc = (float)$tdv['div'];
+            }
+        }
+        if ($div_fc !== null && $div_sid) {
+            $div_price = (float)$wpdb->get_var($wpdb->prepare(
+                "SELECT price FROM {$wpdb->prefix}stock_prices WHERE stock_id = %d ORDER BY datetime DESC LIMIT 1", $div_sid));
+            if ($div_price > 0) $result['dividend_yield'] = $div_fc / $div_price * 100;
+        }
+
         // PEG算出用のEPS：手動入力があればそちらを優先、なければJ-Quants値
         $feps   = $manual_feps   ?? ($jquants !== false ? $jquants['forecast_eps'] : null);
         $nxfeps = $manual_nxfeps ?? ($jquants !== false ? $jquants['next_fy_forecast_eps'] : null);

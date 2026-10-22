@@ -354,6 +354,16 @@ function wp_stocks_tde_forecast_eps($stock_id) {
     return ['eps' => (float)$r->fc_eps, 'cons' => $cons, 'fy_end' => $r->fy_end, 'disc_at' => $r->disc_at];
 }
 
+// 会社予想の年間配当（円）。決算短信（TDnet）の最新の開示から。なければnull
+function wp_stocks_tde_forecast_dividend($stock_id) {
+    global $wpdb;
+    if (!wp_stocks_tde_ensure_table()) return null;
+    $r = $wpdb->get_row($wpdb->prepare(
+        "SELECT div_forecast, COALESCE(disclosed_at, period_end) AS disc_at FROM " . wp_stocks_tde_results_table() . " WHERE stock_id = %d AND div_forecast > 0 ORDER BY COALESCE(disclosed_at, period_end) DESC LIMIT 1", $stock_id));
+    if (!$r) return null;
+    return ['div' => (float)$r->div_forecast, 'disc_at' => $r->disc_at];
+}
+
 // 直近の「業績予想の修正」ニュース（ニュース履歴から。決算短信の表が無い修正のお知らせも拾う）
 function wp_stocks_tde_render_revisions($stock_id, $standalone = false) {
     global $wpdb;

@@ -93,6 +93,18 @@ function wp_stocks_jquants_get_fins_summary_from_records($records) {
         }
     }
 
+    // 予想年間配当（FDivAnn）も、四半期開示では空のことがあるため、直近の非空値を探す
+    // （空なのは「未発表・据え置き」であって「無配」ではない。開示日も一緒に控える）
+    $latest_fdiv      = null;
+    $latest_fdiv_disc = null;
+    foreach ($records as $r) {
+        if (isset($r['FDivAnn']) && $r['FDivAnn'] !== '') {
+            $latest_fdiv      = $r['FDivAnn'];
+            $latest_fdiv_disc = $r['DiscDate'] ?? null;
+            break;
+        }
+    }
+
     // 空文字列はnullとして扱う（FEPSが期末近くで空になるケースに対応）
 
     $clean = function($v) {
@@ -125,7 +137,8 @@ function wp_stocks_jquants_get_fins_summary_from_records($records) {
         'bps'                      => $clean($latest['BPS'] ?? null),
         'equity_ratio'             => $clean($latest['EqAR'] ?? null),
         'roe'                      => $clean($latest_roe),
-        'forecast_dividend_annual' => $clean($latest['FDivAnn'] ?? null),
+        'forecast_dividend_annual' => $clean($latest_fdiv),
+        'forecast_dividend_disc_date' => $latest_fdiv_disc,
         'disc_date'                => $latest['DiscDate'] ?? null,
     ];
 }
