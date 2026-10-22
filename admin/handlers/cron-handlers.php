@@ -240,7 +240,22 @@ add_action('wp_stocks_fund_price_cron', function() {
 // --------------------------------------------------
 add_action('wp_stocks_company_cron', function() {
     global $wpdb;
-    $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks ORDER BY id ASC");
+    // 長時間の実行になるので、PHPの実行時間の上限・接続切れ・メモリ上限で止まらないようにしておく
+    @set_time_limit(0);
+    @ignore_user_abort(true);
+    if (function_exists('wp_raise_memory_limit')) wp_raise_memory_limit('admin');
+
+    // 前回の実行が最後まで届かなかったか確認する（強制終了ではshutdownログが書けないので、進み具合を別に記録している）
+    $progress_opt = 'wp_stocks_company_cron_progress';
+    $prev = get_option($progress_opt);
+    if (is_array($prev) && empty($prev['done'])) {
+        wp_stocks_log('error', 'company_cron', (string)($prev['last'] ?? ''), '前回の企業情報週次更新は最後まで届きませんでした：開始 ' . ($prev['started'] ?? '?') . '、最後に処理した銘柄 ' . ($prev['last'] ?? '?') . '（' . ($prev['at'] ?? '?') . '）、処理済み ' . intval($prev['count'] ?? 0) . '件');
+    }
+    $started_at = current_time('mysql');
+    update_option($progress_opt, ['started' => $started_at, 'last' => '', 'at' => $started_at, 'count' => 0, 'done' => false], false);
+
+    // 更新が古い銘柄から順に処理する（途中で止まっても、次回は更新の古い銘柄から進むため、同じ銘柄が取り残されない）
+    $stocks = $wpdb->get_results("SELECT * FROM {$wpdb->prefix}stocks ORDER BY info_updated_at ASC, id ASC");
     $ok = $ng = 0;
     $edgar_ok = $edgar_ng = 0;
     $jquants_ok = $jquants_ng = 0;
@@ -286,12 +301,15 @@ add_action('wp_stocks_company_cron', function() {
         wp_stocks_log('error', 'company_cron', $s->code, '例外：' . $e->getMessage() . '（' . basename($e->getFile()) . ':' . $e->getLine() . '）');
       }
 
+        update_option($progress_opt, ['started' => $started_at, 'last' => $s->code, 'at' => current_time('mysql'), 'count' => $ok + $ng, 'done' => false], false);
+
         // 負荷対策：3件ごとに5秒sleep、それ以外は2秒
         if (($ok + $ng) % 3 === 0) sleep(5);
         else sleep(2);
     }
 
     $cron_done = true;
+    update_option($progress_opt, ['started' => $started_at, 'last' => $cron_last, 'at' => current_time('mysql'), 'count' => $ok + $ng, 'done' => true], false);
     $msg = sprintf(
         '企業情報週次更新完了：成功%d件 / 失敗%d件（うち米国株EDGAR財務：成功%d件 / 失敗%d件、日本株J-Quants：成功%d件 / 失敗%d件）',
         $ok, $ng, $edgar_ok, $edgar_ng, $jquants_ok, $jquants_ng
