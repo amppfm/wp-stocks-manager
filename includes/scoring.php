@@ -116,9 +116,10 @@ function wp_stocks_get_effective_peg($stock) {
     $feps   = floatval($stock->forward_eps ?? 0);
     $eps    = floatval(wp_stocks_get_effective_eps_actual($stock)['value'] ?? 0);
     $fper   = wp_stocks_get_effective_forward_per($stock);
-    if ($feps <= 0 || $eps <= 0 || $fper <= 0) return $stored;
+    if ($feps <= 0 || $fper <= 0) return $stored;
+    if ($eps <= 0) return 0; // 実績EPSが赤字・不明のときは成長率が意味を持たないためPEGなし
     $growth = ($feps / $eps - 1) * 100;
-    if ($growth <= 0) return 0;
+    if ($growth <= 0 || $growth > 200) return 0; // 減益・横ばい、または+200%超の極端な増益はPEGなし
     return $fper / $growth;
 }
 
@@ -442,6 +443,14 @@ function wp_stocks_calc_score_jp($stock) {
                 $eps_fy_actual = floatval($fy0->eps);
                 $feps          = floatval($tde_fc['eps']);
             }
+        }
+    }
+    // 予想EPSが立花（主ソース）のときは、立花の予想EPS÷実効実績EPS（手動・TDnet・J-Quants。分割疑い・Yahoo代用時は除く）で比べる
+    if (function_exists('wp_stocks_get_forecast_eps_info')) {
+        $fc_info = wp_stocks_get_forecast_eps_info($stock);
+        if ($fc_info['source'] === 'tachibana' && in_array($eps_actual_info['source'], ['manual', 'tdnet', 'jquants'], true) && $eps_actual_info['value'] > 0) {
+            $eps_fy_actual = $eps_actual_info['value'];
+            $feps          = $fc_info['value'];
         }
     }
     if ($eps_fy_actual > 0 && $feps > 0) {

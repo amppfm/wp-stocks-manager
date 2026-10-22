@@ -29,6 +29,7 @@ require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/edgar.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/fmp.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/jpx.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/tachibana.php';
+require_once WP_STOCKS_PLUGIN_DIR . 'includes/data-sources/tachibana-forecast.php';
 require_once plugin_dir_path(__FILE__) . 'includes/news-scoring.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/tdnet-earnings.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/judgment-factors.php';
@@ -502,8 +503,38 @@ function wp_stocks_get_company_info($symbol) {
             }
         }
 
-        // 予想EPS成長率(%) = (来期予想EPS - 当期予想EPS) / 当期予想EPS × 100
-        if (!empty($feps) && !empty($nxfeps) && $feps > 0) {
+        // 立花証券の予想EPS(pEPSF)を主にする（手動入力が最優先。立花に値が無い・取得失敗のときは、上で決めたJ-Quants／TDnet／Yahooの値のまま）
+        $tc_used = false;
+        if ($manual_feps === null && function_exists('wp_stocks_tcf_get')) {
+            $tc_eps = wp_stocks_tcf_get($jquants_code);
+            if ($tc_eps !== null && $tc_eps > 0) {
+                $result['forward_eps'] = $tc_eps;
+                $tc_used = true;
+                $price_tc = wp_stocks_get_price($symbol);
+                if ($price_tc && !empty($price_tc['c']) && $price_tc['c'] > 0) {
+                    $result['forward_per'] = round($price_tc['c'] / $tc_eps, 2);
+                }
+            }
+        }
+
+        if ($tc_used) {
+            // PEG = 予想PER ÷ 予想EPS成長率(%)。成長率 = 立花の予想EPS ÷ 実績EPS − 1。
+            // 実績EPSはJ-Quantsの本決算EPSを使うが、Yahoo実績EPSとの比が0.5〜2倍を外れるとき（株式分割の疑い）はYahoo値にする。
+            // 実績EPSが0以下、成長率が0以下、または+200%超（実質的に意味のない値）のときはPEGなし(0)。
+            // ※画面表示のPEGは scoring.php が表示時に同じ考え方で再計算する（ここは保存値）
+            $eps_yahoo = floatval($result['eps'] ?? 0);
+            $eps_jq    = ($jquants !== false && isset($jquants['eps'])) ? floatval($jquants['eps']) : 0;
+            $eps_base  = $eps_jq;
+            if ($eps_jq > 0 && $eps_yahoo > 0 && ($eps_jq / $eps_yahoo < 0.5 || $eps_jq / $eps_yahoo > 2.0)) $eps_base = $eps_yahoo;
+            if ($eps_base <= 0) $eps_base = $eps_yahoo;
+            $result['peg'] = 0;
+            if ($eps_base > 0 && $result['forward_per'] > 0) {
+                $g_tc = ($tc_eps / $eps_base - 1) * 100;
+                if ($g_tc > 0 && $g_tc <= 200) $result['peg'] = round($result['forward_per'] / $g_tc, 2);
+            }
+        } elseif (!empty($feps) && !empty($nxfeps) && $feps > 0) {
+            // 予想EPS成長率(%) = (来期予想EPS - 当期予想EPS) / 当期予想EPS × 100
+
             $growth_rate = ($nxfeps - $feps) / $feps * 100;
 
             // PEG専用の予想PER：Yahoo予想PER(forward_per)がN/Aの銘柄でも算出できるよう、
