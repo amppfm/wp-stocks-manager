@@ -93,15 +93,34 @@ function wp_stocks_jquants_get_fins_summary_from_records($records) {
         }
     }
 
-    // 予想年間配当（FDivAnn）も、四半期開示では空のことがあるため、直近の非空値を探す
-    // （空なのは「未発表・据え置き」であって「無配」ではない。開示日も一緒に控える）
+    // 予想年間配当：どの開示の値を使うかを決める
+    //   ・直近が本決算(FY)の開示：当期の予想(FDivAnn)は空で、来期の予想(NxFDivAnn)が実質いまの期の予想
+    //   ・直近が四半期開示：同じ決算期(CurFYEn)の中で、直近の非空のFDivAnnを使う
+    //   ・別の決算期の開示は使わない（終わった期の予想を拾ってしまうため）
+    //   ・四半期でFDivAnnが空なら、前の本決算のNxFDivAnnを使う
+    // 開示日は、実際に使った開示のものを控える
     $latest_fdiv      = null;
     $latest_fdiv_disc = null;
-    foreach ($records as $r) {
-        if (isset($r['FDivAnn']) && $r['FDivAnn'] !== '') {
-            $latest_fdiv      = $r['FDivAnn'];
-            $latest_fdiv_disc = $r['DiscDate'] ?? null;
-            break;
+    $cur_fye = $latest['CurFYEn'] ?? '';
+    if (($latest['CurPerType'] ?? '') === 'FY' && isset($latest['NxFDivAnn']) && $latest['NxFDivAnn'] !== '') {
+        $latest_fdiv      = $latest['NxFDivAnn'];
+        $latest_fdiv_disc = $latest['DiscDate'] ?? null;
+    } else {
+        foreach ($records as $r) {
+            if (($r['CurFYEn'] ?? '') === $cur_fye && isset($r['FDivAnn']) && $r['FDivAnn'] !== '') {
+                $latest_fdiv      = $r['FDivAnn'];
+                $latest_fdiv_disc = $r['DiscDate'] ?? null;
+                break;
+            }
+        }
+        if ($latest_fdiv === null) {
+            foreach ($records as $r) {
+                if (($r['CurPerType'] ?? '') === 'FY' && ($r['CurFYEn'] ?? '') < $cur_fye && isset($r['NxFDivAnn']) && $r['NxFDivAnn'] !== '') {
+                    $latest_fdiv      = $r['NxFDivAnn'];
+                    $latest_fdiv_disc = $r['DiscDate'] ?? null;
+                    break;
+                }
+            }
         }
     }
 
