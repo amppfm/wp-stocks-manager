@@ -117,6 +117,9 @@ function wp_stocks_get_effective_peg($stock) {
     $eps    = floatval(wp_stocks_get_effective_eps_actual($stock)['value'] ?? 0);
     $fper   = wp_stocks_get_effective_forward_per($stock);
     if ($feps <= 0 || $fper <= 0) return $stored;
+    // 実績EPSが株式分割の疑い・Yahoo代用のとき（スコアの「会社予想の増益率」と同じ扱い）は、成長率が信頼できないためPEGなし
+    $eps_src = wp_stocks_get_effective_eps_actual($stock)['source'] ?? '';
+    if (!in_array($eps_src, ['manual', 'tdnet', 'jquants'], true)) return 0;
     if ($eps <= 0) return 0; // 実績EPSが赤字・不明のときは成長率が意味を持たないためPEGなし
     $growth = ($feps / $eps - 1) * 100;
     if ($growth <= 0 || $growth > 200) return 0; // 減益・横ばい、または+200%超の極端な増益はPEGなし

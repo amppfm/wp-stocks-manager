@@ -462,6 +462,11 @@ function wp_stocks_get_company_info($symbol) {
                 "SELECT price FROM {$wpdb->prefix}stock_prices WHERE stock_id = %d ORDER BY datetime DESC LIMIT 1", $div_sid));
             if ($div_price > 0) $result['dividend_yield'] = $div_fc / $div_price * 100;
         }
+        // 立花の予想配当利回り(分割調整済み)があればそれを主にする（手動の予想年間配当は、この後の上書きで最優先）
+        if (function_exists('wp_stocks_tcf_get_yield')) {
+            $tc_yield = wp_stocks_tcf_get_yield($jquants_code);
+            if ($tc_yield !== null) $result['dividend_yield'] = $tc_yield;
+        }
 
         // PEG算出用のEPS：手動入力があればそちらを優先、なければJ-Quants値
         $feps   = $manual_feps   ?? ($jquants !== false ? $jquants['forecast_eps'] : null);
