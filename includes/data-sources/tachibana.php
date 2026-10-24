@@ -729,14 +729,16 @@ function wp_stocks_tachibana_news_run($which) {
     $tz = new DateTimeZone('Asia/Tokyo');
     if ($which === 'catchup') {
         // 今日より前の直近N営業日（土日除く）を取り直す。既存行はスキップされる
-        $n = max(1, min(5, (int)get_option('wp_stocks_tcn_catchup_bdays', 2)));
-        $d = new DateTime('today', $tz);
-        $r = [];
-        for ($i = 0; $i < 14 && count($r) < $n; $i++) {
+        // ※土日の日付も取得する（営業日の数には数えない。土日に配信されたニュースも補完するため）
+        $n  = max(1, min(5, (int)get_option('wp_stocks_tcn_catchup_bdays', 2)));
+        $d  = new DateTime('today', $tz);
+        $r  = [];
+        $bd = 0;
+        for ($i = 0; $i < 14 && $bd < $n; $i++) {
             $d->modify('-1 day');
-            if ((int)$d->format('N') >= 6) continue;
             if (count($r) > 0) sleep(2);
             $r[] = wp_stocks_tachibana_news_fetch_day($d->format('Ymd'));
+            if ((int)$d->format('N') < 6) $bd++;
         }
     } else {
         $d = new DateTime('now', $tz);
@@ -755,12 +757,13 @@ function wp_stocks_tachibana_news_backfill($bdays = 7) {
     $n   = 0;
     $bdays = max(1, (int)$bdays);
     while (true) {
+        // 土日の日付も取得する（営業日の数には数えない）
+        $out[] = wp_stocks_tachibana_news_fetch_day($d->format('Ymd'));
         if ((int)$d->format('N') < 6) {
-            $out[] = wp_stocks_tachibana_news_fetch_day($d->format('Ymd'));
             $n++;
             if ($n >= $bdays) break;
-            sleep(2);
         }
+        sleep(2);
         $d->modify('-1 day');
     }
     $out['cleanup'] = wp_stocks_tachibana_news_cleanup();
