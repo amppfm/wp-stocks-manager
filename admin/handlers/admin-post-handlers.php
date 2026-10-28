@@ -853,7 +853,7 @@ add_action('admin_post_move_to_watch', function() {
     if (!current_user_can('manage_options')) wp_die('権限がありません');
     global $wpdb;
     $id = intval($_GET['id'] ?? 0);
-    if ($id) $wpdb->update($wpdb->prefix . 'stocks', ['status' => 'watch', 'purchase_price' => 0, 'purchase_qty' => 0], ['id' => $id]);
+    if ($id) $wpdb->update($wpdb->prefix . 'stocks', ['status' => 'watch', 'purchase_price' => 0, 'purchase_qty' => 0, 'purchase_date' => null], ['id' => $id]);
     wp_redirect(admin_url('admin.php?page=wp-stocks-portfolio'));
     exit;
 });

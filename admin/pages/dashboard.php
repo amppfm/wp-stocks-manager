@@ -307,6 +307,7 @@ function wp_stocks_dashboard_page() {
     // 描画開始
     // ============================================================
     echo '<div class="wrap"><h1>📋 ウォッチリスト</h1>';
+    echo wp_stocks_exit_dashboard_panel_html(); // 出口サイン（保有銘柄）
 
     // サマリーバー
     echo '<div style="display:flex;gap:15px;flex-wrap:wrap;margin-bottom:20px;padding:15px;background:#f8f9fa;border-radius:8px;border:1px solid #ddd;">';

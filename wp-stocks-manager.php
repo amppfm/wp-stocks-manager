@@ -16,7 +16,7 @@ if (!get_option('wp_stocks_temp_opcache_reset_done')) {
     update_option('wp_stocks_temp_opcache_reset_done', 1);
 }
 
-define('WP_STOCKS_VERSION', '5.7');
+define('WP_STOCKS_VERSION', '5.8');
 define('WP_STOCKS_LOG_DAYS', 30);
 
 // --------------------------------------------------
@@ -47,6 +47,7 @@ require_once WP_STOCKS_PLUGIN_DIR . 'includes/overall-judgment-explain.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/technicals.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/scoring.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'includes/db.php';
+require_once WP_STOCKS_PLUGIN_DIR . 'includes/exit-strategy.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'admin/pages/misc-pages.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'admin/pages/funds-page.php';
 require_once WP_STOCKS_PLUGIN_DIR . 'admin/pages/dashboard.php';

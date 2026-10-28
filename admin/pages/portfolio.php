@@ -18,8 +18,16 @@ function wp_stocks_portfolio_page() {
         $id    = intval($_POST['stock_id']);
         $price = floatval($_POST['purchase_price']);
         $qty   = intval($_POST['purchase_qty']);
-        $wpdb->update($wpdb->prefix . 'stocks', ['purchase_price' => $price, 'purchase_qty' => $qty, 'status' => 'portfolio'], ['id' => $id]);
+        $pdate = wp_stocks_exit_sanitize_date($_POST['purchase_date'] ?? ''); // 空欄・不正はNULL（あとで入力可）
+        $wpdb->update($wpdb->prefix . 'stocks', ['purchase_price' => $price, 'purchase_qty' => $qty, 'purchase_date' => $pdate, 'status' => 'portfolio'], ['id' => $id]);
         echo '<div class="updated"><p>購入情報を保存しました。</p></div>';
+    }
+
+    // 出口サイン設定の保存
+    if (isset($_POST['wp_stocks_save_exit_settings'])) {
+        check_admin_referer('wp_stocks_exit_settings_nonce');
+        wp_stocks_exit_save_settings($_POST);
+        echo '<div class="updated"><p>出口サイン設定を保存しました。</p></div>';
     }
 
     // 購入情報編集フォーム
@@ -35,6 +43,7 @@ function wp_stocks_portfolio_page() {
             echo '<table class="form-table"><tbody>';
             echo '<tr><th>平均取得単価（円）</th><td><input type="number" name="purchase_price" value="' . esc_attr($stock->purchase_price ?? '') . '" step="0.01" style="width:150px;" required> 円</td></tr>';
             echo '<tr><th>保有株数</th><td><input type="number" name="purchase_qty" value="' . esc_attr($stock->purchase_qty ?? '') . '" style="width:150px;" required> 株</td></tr>';
+            echo '<tr><th>購入日</th><td><input type="date" name="purchase_date" value="' . esc_attr(!empty($stock->purchase_date) ? $stock->purchase_date : '') . '" style="width:170px;"> <span style="color:#888;font-size:12px;">空欄でも保存できます（保有日数・一部の出口サインは購入日が入ると出ます）</span></td></tr>';
             echo '</tbody></table>';
             echo '<p><button type="submit" name="wp_stocks_save_purchase" class="button button-primary">保存してポートフォリオに追加</button> <a href="' . admin_url('admin.php?page=wp-stocks-dashboard') . '" class="button">キャンセル</a></p>';
             echo '</form></div>';
@@ -153,6 +162,9 @@ function wp_stocks_portfolio_page() {
     echo '</div></div>';
 
     if (!$stocks && empty($funds)) { echo '<p>ポートフォリオに銘柄がありません。</p></div>'; return; }
+
+    // 出口サイン設定（全体共通）
+    echo wp_stocks_exit_settings_form_html();
 
     // =============================================
     // 表示② 日本株セクション
@@ -329,7 +341,7 @@ function wp_stocks_portfolio_page() {
 
         // 日本株テーブル
         echo '<table class="widefat fixed striped" style="font-size:12px;margin-bottom:8px;"><thead><tr>';
-        foreach (['コード','銘柄名','トレンド','現在値','前日比','取得単価','株数','評価額','含み損益','含み率','配当予想','操作'] as $h) echo '<th>'.$h.'</th>';
+        foreach (['コード','銘柄名','トレンド','現在値','前日比','取得単価','株数','評価額','含み損益','含み率','配当予想','購入日/保有','出口サイン','操作'] as $h) echo '<th>'.$h.'</th>';
         echo '</tr></thead><tbody>';
         foreach ($jp_rows as $row) {
             extract($row);
@@ -353,6 +365,8 @@ function wp_stocks_portfolio_page() {
             echo '<td style="color:'.$gc2.';font-weight:bold;">'.($gain>=0?'+':'').number_format($gain).'円</td>';
             echo '<td style="color:'.$gc2.';font-weight:bold;">'.($gain_pct>=0?'+':'').number_format($gain_pct,2).'%</td>';
             echo '<td>'.($annual_div>0?number_format($annual_div).'円':'-').'</td>';
+            echo '<td>'.wp_stocks_exit_hold_cell_html($s).'</td>';
+            echo '<td>'.wp_stocks_exit_badges_html(wp_stocks_exit_signals($s, $current_price)).'</td>';
             echo '<td><a href="'.esc_url($edit_url).'" class="button button-small">編集</a> <a href="'.esc_url($watch_url).'" class="button button-small">ウォッチへ</a></td>';
             echo '</tr>';
         }
@@ -371,7 +385,7 @@ function wp_stocks_portfolio_page() {
     if (!empty($foreign_rows)) {
         echo '<h2 style="margin:20px 0 15px 0;font-size:16px;border-left:4px solid #3498db;padding-left:10px;">🌍 外国株</h2>';
         echo '<table class="widefat fixed striped" style="font-size:12px;margin-bottom:8px;"><thead><tr>';
-        foreach (['コード','銘柄名','トレンド','現在値','前日比','取得単価','株数','評価額','含み損益','含み率','配当予想','操作'] as $h) echo '<th>'.$h.'</th>';
+        foreach (['コード','銘柄名','トレンド','現在値','前日比','取得単価','株数','評価額','含み損益','含み率','配当予想','購入日/保有','出口サイン','操作'] as $h) echo '<th>'.$h.'</th>';
         echo '</tr></thead><tbody>';
         foreach ($foreign_rows as $row) {
             extract($row);
@@ -413,6 +427,8 @@ function wp_stocks_portfolio_page() {
             echo '<td>'.$gain_str.'</td>';
             echo '<td style="color:'.$gc2.';font-weight:bold;">'.($gain_pct>=0?'+':'').number_format($gain_pct,2).'%</td>';
             echo '<td>'.$div_str.'</td>';
+            echo '<td>'.wp_stocks_exit_hold_cell_html($s).'</td>';
+            echo '<td>'.wp_stocks_exit_badges_html(wp_stocks_exit_signals($s, $current_price)).'</td>';
             echo '<td><a href="'.esc_url($edit_url).'" class="button button-small">編集</a> <a href="'.esc_url($watch_url).'" class="button button-small">ウォッチへ</a></td>';
             echo '</tr>';
         }

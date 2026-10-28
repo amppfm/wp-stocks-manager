@@ -45,6 +45,7 @@ function wp_stocks_manager_create_tables() {
         earnings_date DATE DEFAULT NULL,
         purchase_price FLOAT DEFAULT 0,
         purchase_qty INT DEFAULT 0,
+        purchase_date DATE DEFAULT NULL,
         info_updated_at DATETIME DEFAULT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id)
@@ -359,6 +360,8 @@ function wp_stocks_manager_create_tables() {
         'manual_equity_ratio'              => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_equity_ratio FLOAT DEFAULT NULL AFTER manual_roe",
         'manual_forecast_dividend_annual'  => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_forecast_dividend_annual FLOAT DEFAULT NULL AFTER manual_equity_ratio",
         'manual_set_disc_date'             => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN manual_set_disc_date DATE DEFAULT NULL AFTER manual_forecast_dividend_annual",
+        // 2026-10-28：出口戦略（購入日。保有日数・出口サインの基準。空欄可）
+        'purchase_date'                    => "ALTER TABLE {$wpdb->prefix}stocks ADD COLUMN purchase_date DATE DEFAULT NULL AFTER purchase_qty",
     ];
 
     foreach ($new_cols as $col => $sql) {
