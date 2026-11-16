@@ -78,6 +78,13 @@ if (isset($_POST['wp_stocks_add'])) {
         if (!empty($shikiho))       $msg .= ' 四季報情報を保存しました。';
         if (!empty($theme_fetched)) $msg .= ' テーマ（' . substr_count($theme_fetched, ',') + 1 . '件）を自動取得しました。';
         echo '<div class="updated"><p>' . $msg . '</p></div>';
+
+        // ★追加：登録成功時のみ、その銘柄のページへ遷移（出力開始後のため JS/meta で遷移）
+        if (!empty($new_id)) {
+            $company_url = admin_url('admin.php?page=wp-stocks-company&stock_id=' . intval($new_id) . '&message=stock_added');
+            echo '<script>location.replace(' . wp_json_encode($company_url) . ');</script>';
+            echo '<noscript><meta http-equiv="refresh" content="0;url=' . esc_url($company_url) . '"></noscript>';
+        }
     }
 }
 

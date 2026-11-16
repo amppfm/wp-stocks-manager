@@ -84,6 +84,7 @@ function wp_stocks_company_page() {
     if (isset($_GET['message'])) {
         $m = $_GET['message'];
         if ($m === 'watchlist_saved') echo '<div class="updated"><p>注目株の設定を変更しました。</p></div>';
+        if ($m === 'stock_added') echo '<div class="updated"><p>銘柄を登録し、企業情報を自動取得しました。</p></div>';
         if ($m === 'tags_saved') echo '<div class="updated"><p>テーマタグを保存しました。</p></div>';
         if ($m === 'memo_saved') echo '<div class="updated"><p>メモを保存しました。</p></div>';
         if ($m === 'ai_saved')   echo '<div class="updated"><p>AI分析結果を履歴に保存しました。</p></div>';
